@@ -10,6 +10,14 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  
+  /* Custom colors */
+  --color-invisi-green: #2F5233;
+  --color-invisi-light: #F9FAFB;
+  --color-status-fermenting: #F59E0B;
+  --color-status-drying: #3B82F6;
+  --color-status-sorting: #A855F7;
+  --color-status-ready: #22C55E;
 }
 
 @media (prefers-color-scheme: dark) {

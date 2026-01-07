@@ -1,65 +1,157 @@
-import Image from "next/image";
+import { Header } from "@/components/Header";
+import { BottomNav } from "@/components/BottomNav";
+import { StatsCard } from "@/components/StatsCard";
+import { BatchCard, BatchStatus } from "@/components/BatchCard";
+import { Layers, Verified, Wallet, Plus, Thermometer, Droplets, Scale, Sun, Wind, CheckCircle2, Bean } from "lucide-react";
 
 export default function Home() {
+  const stats = [
+    {
+      label: "Total Batches",
+      value: "12",
+      subtext: "Active in processing",
+      icon: Layers,
+      iconBgClass: "bg-orange-100",
+      iconColorClass: "text-orange-600"
+    },
+    {
+      label: "Avg Quality",
+      value: "94%",
+      subtext: "Above regional average",
+      icon: Verified,
+      iconBgClass: "bg-green-100",
+      iconColorClass: "text-green-600",
+      trend: { value: "2.4%", isPositive: true }
+    },
+    {
+      label: "Total Income",
+      value: "₵15,400",
+      subtext: "Gross revenue YTD",
+      icon: Wallet,
+      iconBgClass: "bg-orange-100",
+      iconColorClass: "text-orange-600"
+    }
+  ];
+
+  const batches = [
+    {
+      id: "204",
+      batchNumber: "Batch #204",
+      dateLabel: "Started",
+      dateValue: "Oct 12, 2023",
+      status: "fermenting" as BatchStatus,
+      icon: Bean,
+      metrics: {
+        label: "Progress",
+        value: "Day 3 of 6",
+        progress: 50,
+        subIcon: Thermometer,
+        subLabel: "45°C Temp"
+      }
+    },
+    {
+      id: "203",
+      batchNumber: "Batch #203",
+      dateLabel: "Started",
+      dateValue: "Oct 08, 2023",
+      status: "drying" as BatchStatus,
+      icon: Sun,
+      metrics: {
+        label: "Moisture",
+        value: "12%",
+        target: "Target: 7%",
+        progress: 60, // inverse progress really, but keeping simple
+        subIcon: Droplets,
+        subLabel: "Humidity Control"
+      }
+    },
+    {
+      id: "202",
+      batchNumber: "Batch #202",
+      dateLabel: "Started",
+      dateValue: "Oct 01, 2023",
+      status: "sorting" as BatchStatus,
+      icon: Wind, // Abstract for sorting
+      metrics: {
+        label: "Quality Check",
+        value: "Pending",
+        progress: 85,
+        subIcon: Scale,
+        subLabel: "Est. 52 kg"
+      }
+    },
+    {
+      id: "201",
+      batchNumber: "Batch #201",
+      dateLabel: "Completed",
+      dateValue: "Oct 14, 2023",
+      status: "ready" as BatchStatus,
+      icon: CheckCircle2,
+      metrics: {
+        label: "Total Weight",
+        value: "50 kg"
+      }
+    }
+  ];
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="min-h-screen bg-invisi-light pb-32 font-sans text-gray-900">
+      <Header />
+
+      <main className="mx-auto max-w-7xl px-6 py-8 md:px-10">
+        {/* Greeting Section */}
+        <div className="mb-10 flex flex-col justify-between gap-4 md:flex-row md:items-end">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-green-700">
+              <Sun size={16} />
+              <span>GOOD MORNING</span>
+            </div>
+            <h1 className="mt-2 text-4xl font-bold tracking-tight text-gray-900">Hello, Kwame</h1>
+            <p className="mt-2 text-gray-500">Here's what's happening on your farm today.</p>
+          </div>
+          <button className="flex items-center gap-2 rounded-xl bg-invisi-green px-6 py-3 font-semibold text-white shadow-lg shadow-green-900/10 transition-transform hover:scale-105 active:scale-95">
+            <Plus size={20} />
+            Add New Batch
+          </button>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        {/* Stats Grid */}
+        <div className="mb-12 grid gap-6 md:grid-cols-3">
+          {stats.map((stat, idx) => (
+            <StatsCard key={idx} {...stat} />
+          ))}
+        </div>
+
+        {/* Batch Status Section */}
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+          <h2 className="text-xl font-bold text-gray-900">Batch Status</h2>
+
+          {/* Tabs */}
+          <div className="flex items-center rounded-xl bg-white p-1 shadow-sm ring-1 ring-gray-100">
+            <button className="rounded-lg bg-gray-900 px-4 py-1.5 text-sm font-medium text-white shadow-sm transition-all">All</button>
+            {['Fermenting', 'Drying', 'Ready'].map(tab => (
+              <button key={tab} className="rounded-lg px-4 py-1.5 text-sm font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-900 transition-all">{tab}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Batch Grid */}
+        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+          {batches.map(batch => (
+            <BatchCard key={batch.id} {...batch} />
+          ))}
+
+          {/* 'Start New' Dashed Card */}
+          <button className="flex min-h-[300px] flex-col items-center justify-center gap-4 rounded-2xl border-2 border-dashed border-gray-200 bg-white/50 p-6 text-gray-400 transition-all hover:border-invisi-green hover:bg-green-50/50 hover:text-invisi-green">
+            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-white shadow-sm">
+              <Plus size={24} />
+            </div>
+            <span className="font-semibold text-gray-900">Start New Batch</span>
+          </button>
         </div>
       </main>
+
+      <BottomNav />
     </div>
   );
 }
