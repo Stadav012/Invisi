@@ -1,3 +1,4 @@
+import { motion } from "framer-motion";
 import { LucideIcon, Thermometer, Droplets, Scale, CircleCheck } from "lucide-react";
 
 export type BatchStatus = 'fermenting' | 'drying' | 'sorting' | 'ready';
@@ -66,7 +67,15 @@ export function BatchCard({
     const config = statusConfig[status];
 
     return (
-        <div className="flex h-full min-w-[300px] flex-col justify-between rounded-2xl border border-gray-100 bg-white p-6 shadow-sm transition-shadow hover:shadow-md">
+        <motion.div
+            layout
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.9 }}
+            whileHover={{ y: -5, transition: { duration: 0.2 } }}
+            transition={{ layout: { duration: 0.3 } }}
+            className="flex h-full min-w-[300px] flex-col justify-between rounded-2xl border border-gray-100 bg-white p-6 shadow-sm transition-shadow hover:shadow-md"
+        >
             {/* Header */}
             <div className="flex items-start justify-between">
                 <div className={`flex h-12 w-12 items-center justify-center rounded-full ${config.iconBg}`}>
@@ -118,6 +127,6 @@ export function BatchCard({
                     </>
                 )}
             </div>
-        </div>
+        </motion.div>
     );
 }

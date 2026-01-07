@@ -1,3 +1,4 @@
+import { motion } from "framer-motion";
 import { LucideIcon } from "lucide-react";
 
 interface StatsCardProps {
@@ -23,7 +24,11 @@ export function StatsCard({
     trend
 }: StatsCardProps) {
     return (
-        <div className="flex flex-col justify-between rounded-2xl border border-gray-100 bg-white p-6 shadow-sm">
+        <motion.div
+            whileHover={{ scale: 1.02 }}
+            transition={{ type: "spring", stiffness: 300 }}
+            className="flex flex-col justify-between rounded-2xl border border-gray-100 bg-white p-6 shadow-sm"
+        >
             <div className="flex items-start justify-between">
                 <span className="text-sm font-medium text-gray-500">{label}</span>
                 <div className={`flex h-10 w-10 items-center justify-center rounded-full ${iconBgClass}`}>
@@ -43,6 +48,6 @@ export function StatsCard({
                 </div>
                 <p className="mt-1 text-sm text-gray-400">{subtext}</p>
             </div>
-        </div>
+        </motion.div>
     );
 }

@@ -1,5 +1,7 @@
 "use client";
 
+import { motion, AnimatePresence } from "framer-motion";
+
 import { useState } from "react";
 import { Header } from "@/components/Header";
 import { BottomNav } from "@/components/BottomNav";
@@ -147,9 +149,28 @@ export default function Home() {
     <div className="min-h-screen bg-invisi-light pb-32 font-sans text-gray-900">
       <Header />
 
-      <main className="mx-auto max-w-7xl px-6 py-8 md:px-10">
+      <motion.main
+        initial="hidden"
+        animate="visible"
+        variants={{
+          hidden: { opacity: 0 },
+          visible: {
+            opacity: 1,
+            transition: {
+              staggerChildren: 0.1
+            }
+          }
+        }}
+        className="mx-auto max-w-7xl px-6 py-8 md:px-10"
+      >
         {/* Greeting Section */}
-        <div className="mb-10 flex flex-col justify-between gap-4 md:flex-row md:items-end">
+        <motion.div
+          variants={{
+            hidden: { y: 20, opacity: 0 },
+            visible: { y: 0, opacity: 1 }
+          }}
+          className="mb-10 flex flex-col justify-between gap-4 md:flex-row md:items-end"
+        >
           <div>
             <div className="flex items-center gap-2 text-sm font-semibold text-green-700">
               <Sun size={16} />
@@ -158,24 +179,38 @@ export default function Home() {
             <h1 className="mt-2 text-4xl font-bold tracking-tight text-gray-900">Hello, Kwame</h1>
             <p className="mt-2 text-gray-500">Here's what's happening on your farm today.</p>
           </div>
-          <button
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
             onClick={() => setIsModalOpen(true)}
-            className="flex items-center gap-2 rounded-xl bg-invisi-green px-6 py-3 font-semibold text-white shadow-lg shadow-green-900/10 transition-transform hover:scale-105 active:scale-95"
+            className="flex items-center gap-2 rounded-xl bg-invisi-green px-6 py-3 font-semibold text-white shadow-lg shadow-green-900/10"
           >
             <Plus size={20} />
             Add New Batch
-          </button>
-        </div>
+          </motion.button>
+        </motion.div>
 
         {/* Stats Grid */}
-        <div className="mb-12 grid gap-6 md:grid-cols-3">
+        <motion.div
+          variants={{
+            hidden: { y: 20, opacity: 0 },
+            visible: { y: 0, opacity: 1 }
+          }}
+          className="mb-12 grid gap-6 md:grid-cols-3"
+        >
           {stats.map((stat, idx) => (
             <StatsCard key={idx} {...stat} />
           ))}
-        </div>
+        </motion.div>
 
         {/* Batch Status Section */}
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+        <motion.div
+          variants={{
+            hidden: { y: 20, opacity: 0 },
+            visible: { y: 0, opacity: 1 }
+          }}
+          className="mb-6 flex flex-wrap items-center justify-between gap-4"
+        >
           <h2 className="text-xl font-bold text-gray-900">Batch Status</h2>
 
           {/* Tabs */}
@@ -184,35 +219,54 @@ export default function Home() {
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
-                className={`rounded-lg px-4 py-1.5 text-sm font-medium transition-all ${activeTab === tab
-                    ? "bg-gray-900 text-white shadow-sm"
-                    : "text-gray-500 hover:bg-gray-50 hover:text-gray-900"
+                className={`relative rounded-lg px-4 py-1.5 text-sm font-medium transition-colors ${activeTab === tab
+                    ? "text-white"
+                    : "text-gray-500 hover:text-gray-900"
                   }`}
               >
-                {tab}
+                {activeTab === tab && (
+                  <motion.div
+                    layoutId="activeTab"
+                    className="absolute inset-0 rounded-lg bg-gray-900 shadow-sm"
+                    initial={false}
+                    transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                  />
+                )}
+                <span className="relative z-10">{tab}</span>
               </button>
             ))}
           </div>
-        </div>
+        </motion.div>
 
         {/* Batch Grid */}
-        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-          {filteredBatches.map(batch => (
-            <BatchCard key={batch.id} {...batch} />
-          ))}
+        <motion.div
+          layout
+          variants={{
+            hidden: { y: 20, opacity: 0 },
+            visible: { y: 0, opacity: 1 }
+          }}
+          className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4"
+        >
+          <AnimatePresence mode="popLayout">
+            {filteredBatches.map(batch => (
+              <BatchCard key={batch.id} {...batch} />
+            ))}
+          </AnimatePresence>
 
           {/* 'Start New' Dashed Card */}
-          <button
+          <motion.button
+            layout
+            whileHover={{ scale: 1.02, backgroundColor: "rgba(255, 255, 255, 0.8)" }}
             onClick={() => setIsModalOpen(true)}
-            className="flex min-h-[300px] flex-col items-center justify-center gap-4 rounded-2xl border-2 border-dashed border-gray-200 bg-white/50 p-6 text-gray-400 transition-all hover:border-invisi-green hover:bg-green-50/50 hover:text-invisi-green"
+            className="flex min-h-[300px] flex-col items-center justify-center gap-4 rounded-2xl border-2 border-dashed border-gray-200 bg-white/50 p-6 text-gray-400 transition-colors hover:border-invisi-green hover:text-invisi-green"
           >
             <div className="flex h-14 w-14 items-center justify-center rounded-full bg-white shadow-sm">
               <Plus size={24} />
             </div>
             <span className="font-semibold text-gray-900">Start New Batch</span>
-          </button>
-        </div>
-      </main>
+          </motion.button>
+        </motion.div>
+      </motion.main>
 
       <BottomNav />
 
