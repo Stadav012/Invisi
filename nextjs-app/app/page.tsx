@@ -1,95 +1,59 @@
 "use client";
 
-import { motion, AnimatePresence } from "framer-motion";
-
+import { motion } from "framer-motion";
 import { useState } from "react";
 import { Header } from "@/components/Header";
 import { BottomNav } from "@/components/BottomNav";
-import { StatsCard } from "@/components/StatsCard";
-import { BatchCard, BatchStatus } from "@/components/BatchCard";
+import { PodView } from "@/components/PodView"; // Imported PodView
+import { BatchStatus } from "@/components/BatchCard";
 import { NewBatchModal, NewBatchData } from "@/components/NewBatchModal";
-import { Layers, Verified, Wallet, Plus, Thermometer, Droplets, Scale, Sun, Wind, CheckCircle2, Bean } from "lucide-react";
+import { Plus, Thermometer, LucideIcon } from "lucide-react";
+
+interface Batch {
+  id: string;
+  batchNumber: string;
+  dateLabel: string;
+  dateValue: string;
+  status: BatchStatus;
+  metrics: {
+    label: string;
+    value: string;
+    target?: string;
+    progress: number;
+    subIcon?: LucideIcon;
+    subLabel?: string;
+  };
+}
 
 export default function Home() {
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState("All");
 
-  const [stats] = useState([
-    {
-      label: "Total Batches",
-      value: "12",
-      subtext: "Active in processing",
-      icon: Layers,
-      iconBgClass: "bg-orange-100",
-      iconColorClass: "text-orange-600"
-    },
-    {
-      label: "Avg Quality",
-      value: "94%",
-      subtext: "Above regional average",
-      icon: Verified,
-      iconBgClass: "bg-green-100",
-      iconColorClass: "text-green-600",
-      trend: { value: "2.4%", isPositive: true }
-    },
-    {
-      label: "Total Income",
-      value: "₵15,400",
-      subtext: "Gross revenue YTD",
-      icon: Wallet,
-      iconBgClass: "bg-orange-100",
-      iconColorClass: "text-orange-600"
-    }
-  ]);
-
-  interface Batch {
-    id: string;
-    batchNumber: string;
-    dateLabel: string;
-    dateValue: string;
-    status: BatchStatus;
-    icon: any;
+  // Single active batch state (Mock data for demo)
+  const [activeBatch, setActiveBatch] = useState<Batch | null>({
+    id: "204",
+    batchNumber: "Batch #204",
+    dateLabel: "Started",
+    dateValue: "Oct 12, 2023",
+    status: "fermenting",
     metrics: {
-      label: string;
-      value: string;
-      target?: string;
-      progress?: number;
-      subIcon?: any;
-      subLabel?: string;
-    };
-  }
+      label: "Progress",
+      value: "Day 3 of 6",
+      progress: 50,
+      subIcon: Thermometer,
+      subLabel: "45°C Temp"
+    }
+  });
 
-  const [batches, setBatches] = useState<Batch[]>([
-    {
-      id: "204",
-      batchNumber: "Batch #204",
-      dateLabel: "Started",
-      dateValue: "Oct 12, 2023",
-      status: "fermenting",
-      icon: Bean,
-      metrics: {
-        label: "Progress",
-        value: "Day 3 of 6",
-        progress: 50,
-        subIcon: Thermometer,
-        subLabel: "45°C Temp"
-      }
-    },
+  // Mock List of recent batches
+  const recentBatches: Batch[] = [
+    activeBatch as Batch,
     {
       id: "203",
       batchNumber: "Batch #203",
       dateLabel: "Started",
       dateValue: "Oct 08, 2023",
       status: "drying",
-      icon: Sun,
-      metrics: {
-        label: "Moisture",
-        value: "12%",
-        target: "Target: 7%",
-        progress: 60,
-        subIcon: Droplets,
-        subLabel: "Humidity Control"
-      }
+      metrics: { label: "Moisture", value: "12%", target: "7%", progress: 80, subLabel: "Humidity Control" }
     },
     {
       id: "202",
@@ -97,14 +61,7 @@ export default function Home() {
       dateLabel: "Started",
       dateValue: "Oct 01, 2023",
       status: "sorting",
-      icon: Wind,
-      metrics: {
-        label: "Quality Check",
-        value: "Pending",
-        progress: 85,
-        subIcon: Scale,
-        subLabel: "Est. 52 kg"
-      }
+      metrics: { label: "Quality Check", value: "Pending", progress: 95, subLabel: "Est. 52 kg" }
     },
     {
       id: "201",
@@ -112,38 +69,28 @@ export default function Home() {
       dateLabel: "Completed",
       dateValue: "Oct 14, 2023",
       status: "ready",
-      icon: CheckCircle2,
-      metrics: {
-        label: "Total Weight",
-        value: "50 kg"
-      }
+      metrics: { label: "Total Weight", value: "50 kg", progress: 100 }
     }
-  ]);
+  ];
 
   const handleAddNewBatch = (data: NewBatchData) => {
-    const newBatch: Batch = {
+    const newBatch = {
       id: Math.random().toString(36).substr(2, 9),
-      batchNumber: `Batch #${205 + batches.length}`, // Simple increment logic for demo
+      batchNumber: `Batch #${Math.floor(Math.random() * 1000)}`,
       dateLabel: "Started",
       dateValue: new Date(data.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-      status: "fermenting",
-      icon: Bean,
+      status: "fermenting" as BatchStatus,
       metrics: {
-        label: "Progress",
-        value: "Day 1 of 6",
-        progress: 0,
+        label: "Initial Stage",
+        value: "Day 1 of 5",
+        progress: 10,
         subIcon: Thermometer,
         subLabel: "Ambient Temp"
       }
     };
-
-    setBatches([newBatch, ...batches]);
+    setActiveBatch(newBatch);
     setIsModalOpen(false);
   };
-
-  const filteredBatches = activeTab === "All"
-    ? batches
-    : batches.filter(b => b.status.toLowerCase() === activeTab.toLowerCase());
 
   return (
     <div className="min-h-screen bg-invisi-light pb-32 font-sans text-gray-900">
@@ -154,118 +101,83 @@ export default function Home() {
         animate="visible"
         variants={{
           hidden: { opacity: 0 },
-          visible: {
-            opacity: 1,
-            transition: {
-              staggerChildren: 0.1
-            }
-          }
+          visible: { opacity: 1, transition: { staggerChildren: 0.1 } }
         }}
         className="mx-auto max-w-7xl px-6 py-8 md:px-10"
       >
-        {/* Greeting Section */}
+        {/* Main Hub Visualization (Diamond + Stats) */}
         <motion.div
-          variants={{
-            hidden: { y: 20, opacity: 0 },
-            visible: { y: 0, opacity: 1 }
-          }}
-          className="mb-10 flex flex-col justify-between gap-4 md:flex-row md:items-end"
+          variants={{ hidden: { scale: 0.95, opacity: 0 }, visible: { scale: 1, opacity: 1 } }}
+          className="w-full mb-12 relative z-10"
         >
-          <div>
-            <div className="flex items-center gap-2 text-sm font-semibold text-green-700">
-              <Sun size={16} />
-              <span>GOOD MORNING</span>
+          {activeBatch ? (
+            <PodView batch={activeBatch} />
+          ) : (
+            <div className="h-[500px] w-full flex items-center justify-center bg-gray-100 rounded-3xl">
+              <button onClick={() => setIsModalOpen(true)} className="px-6 py-3 bg-invisi-green text-white rounded-xl font-bold shadow-lg">Start New Batch</button>
             </div>
-            <h1 className="mt-2 text-4xl font-bold tracking-tight text-gray-900">Hello, Kwame</h1>
-            <p className="mt-2 text-gray-500">Here's what's happening on your farm today.</p>
+          )}
+        </motion.div>
+
+        {/* Batch Status List */}
+        <div>
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-bold text-gray-900">Batch Status</h2>
+            <div className="flex gap-2">
+              <span className="px-3 py-1 bg-gray-900 text-white text-xs font-bold rounded-lg">All</span>
+              <span className="px-3 py-1 text-gray-500 text-xs font-medium hover:bg-gray-100 rounded-lg cursor-pointer">Fermenting</span>
+              <span className="px-3 py-1 text-gray-500 text-xs font-medium hover:bg-gray-100 rounded-lg cursor-pointer">Drying</span>
+              <span className="px-3 py-1 text-gray-500 text-xs font-medium hover:bg-gray-100 rounded-lg cursor-pointer">Ready</span>
+            </div>
           </div>
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={() => setIsModalOpen(true)}
-            className="flex items-center gap-2 rounded-xl bg-invisi-green px-6 py-3 font-semibold text-white shadow-lg shadow-green-900/10"
-          >
-            <Plus size={20} />
-            Add New Batch
-          </motion.button>
-        </motion.div>
 
-        {/* Stats Grid */}
-        <motion.div
-          variants={{
-            hidden: { y: 20, opacity: 0 },
-            visible: { y: 0, opacity: 1 }
-          }}
-          className="mb-12 grid gap-6 md:grid-cols-3"
-        >
-          {stats.map((stat, idx) => (
-            <StatsCard key={idx} {...stat} />
-          ))}
-        </motion.div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {recentBatches.map((batch, i) => (
+              <div key={i} className="h-[280px]">
+                {batch && (
+                  <div className="h-full rounded-2xl border border-gray-100 bg-white p-6 shadow-sm hover:shadow-md transition-shadow">
+                    {/* Simply mocking the internal BatchCard structure here for speed/demo consistency or reuse component if props match exactly */}
+                    <div className="flex items-center justify-between mb-4">
+                      <div className={`h-10 w-10 rounded-full flex items-center justify-center ${batch.status === 'fermenting' ? 'bg-orange-100 text-orange-600' : batch.status === 'drying' ? 'bg-blue-100 text-blue-600' : batch.status === 'ready' ? 'bg-green-100 text-green-600' : 'bg-purple-100 text-purple-600'}`}>
+                        {/* Icons would ideally be dynamic */}
+                        <div className="h-4 w-4 bg-current rounded-full opacity-50" />
+                      </div>
+                      <span className={`px-2 py-1 rounded text-xs font-bold capitalize ${batch.status === 'fermenting' ? 'bg-orange-50 text-orange-700' : batch.status === 'drying' ? 'bg-blue-50 text-blue-700' : 'bg-gray-50 text-gray-700'}`}>
+                        {batch.status}
+                      </span>
+                    </div>
+                    <h3 className="text-lg font-bold text-gray-900">{batch.batchNumber}</h3>
+                    <p className="text-xs text-gray-500 mb-6">{batch.dateLabel}: {batch.dateValue}</p>
 
-        {/* Batch Status Section */}
-        <motion.div
-          variants={{
-            hidden: { y: 20, opacity: 0 },
-            visible: { y: 0, opacity: 1 }
-          }}
-          className="mb-6 flex flex-wrap items-center justify-between gap-4"
-        >
-          <h2 className="text-xl font-bold text-gray-900">Batch Status</h2>
-
-          {/* Tabs */}
-          <div className="flex items-center rounded-xl bg-white p-1 shadow-sm ring-1 ring-gray-100">
-            {['All', 'Fermenting', 'Drying', 'Ready'].map(tab => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                className={`relative rounded-lg px-4 py-1.5 text-sm font-medium transition-colors ${activeTab === tab
-                    ? "text-white"
-                    : "text-gray-500 hover:text-gray-900"
-                  }`}
-              >
-                {activeTab === tab && (
-                  <motion.div
-                    layoutId="activeTab"
-                    className="absolute inset-0 rounded-lg bg-gray-900 shadow-sm"
-                    initial={false}
-                    transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                  />
+                    <div className="flex justify-between text-xs font-bold text-gray-700 mb-1">
+                      <span>{batch.metrics.label}</span>
+                      <span>{batch.metrics.value}</span>
+                    </div>
+                    <div className="w-full bg-gray-100 rounded-full h-1.5 mb-2 overflow-hidden">
+                      <div className="bg-gray-900 h-full rounded-full" style={{ width: `${batch.metrics.progress}%` }}></div>
+                    </div>
+                    <div className="text-xs text-gray-400 flex items-center gap-1">
+                      {batch.metrics.subLabel}
+                    </div>
+                    {batch.status === 'ready' && (
+                      <button className="mt-4 w-full py-2 border border-green-600 text-green-700 font-bold text-xs rounded-lg hover:bg-green-50">
+                        List on Market
+                      </button>
+                    )}
+                  </div>
                 )}
-                <span className="relative z-10">{tab}</span>
-              </button>
+              </div>
             ))}
-          </div>
-        </motion.div>
-
-        {/* Batch Grid */}
-        <motion.div
-          layout
-          variants={{
-            hidden: { y: 20, opacity: 0 },
-            visible: { y: 0, opacity: 1 }
-          }}
-          className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4"
-        >
-          <AnimatePresence mode="popLayout">
-            {filteredBatches.map(batch => (
-              <BatchCard key={batch.id} {...batch} />
-            ))}
-          </AnimatePresence>
-
-          {/* 'Start New' Dashed Card */}
-          <motion.button
-            layout
-            whileHover={{ scale: 1.02, backgroundColor: "rgba(255, 255, 255, 0.8)" }}
-            onClick={() => setIsModalOpen(true)}
-            className="flex min-h-[300px] flex-col items-center justify-center gap-4 rounded-2xl border-2 border-dashed border-gray-200 bg-white/50 p-6 text-gray-400 transition-colors hover:border-invisi-green hover:text-invisi-green"
-          >
-            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-white shadow-sm">
-              <Plus size={24} />
+            {/* New Batch Card Placeholder */}
+            <div onClick={() => setIsModalOpen(true)} className="h-[280px] border-2 border-dashed border-gray-200 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:border-gray-400 transition-colors group">
+              <div className="h-12 w-12 bg-gray-50 rounded-full flex items-center justify-center text-gray-400 group-hover:bg-gray-100 transition-colors">
+                <Plus size={24} />
+              </div>
+              <span className="mt-3 text-sm font-bold text-gray-500">Start New Batch</span>
             </div>
-            <span className="font-semibold text-gray-900">Start New Batch</span>
-          </motion.button>
-        </motion.div>
+          </div>
+        </div>
+
       </motion.main>
 
       <BottomNav />
