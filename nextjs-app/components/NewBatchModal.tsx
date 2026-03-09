@@ -13,6 +13,7 @@ export interface NewBatchData {
     variety: string;
     date: string;
     notes: string;
+    recording_interval_mins: number;
 }
 
 export function NewBatchModal({ isOpen, onClose, onSubmit }: NewBatchModalProps) {
@@ -20,18 +21,19 @@ export function NewBatchModal({ isOpen, onClose, onSubmit }: NewBatchModalProps)
         weight: "",
         variety: "Amelonado",
         date: new Date().toISOString().split("T")[0],
-        notes: ""
+        notes: "",
+        recording_interval_mins: 5
     });
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         onSubmit(formData);
-        // Reset form after a short delay or controlled by parent, but for now just submit
         setFormData({
             weight: "",
             variety: "Amelonado",
             date: new Date().toISOString().split("T")[0],
-            notes: ""
+            notes: "",
+            recording_interval_mins: 5
         });
     };
 
@@ -142,6 +144,26 @@ export function NewBatchModal({ isOpen, onClose, onSubmit }: NewBatchModalProps)
                                             onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                                             className="w-full rounded-xl border border-gray-200 bg-gray-50 py-3 pl-10 pr-4 text-gray-900 outline-none transition-all focus:border-invisi-green focus:bg-white focus:ring-2 focus:ring-green-500/10"
                                         />
+                                    </div>
+                                </div>
+
+                                {/* Aggregation Interval */}
+                                <div>
+                                    <label className="mb-1.5 block text-sm font-semibold text-gray-700">Sensor Recording Interval</label>
+                                    <div className="relative">
+                                        <div className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
+                                        </div>
+                                        <select
+                                            value={formData.recording_interval_mins}
+                                            onChange={(e) => setFormData({ ...formData, recording_interval_mins: Number(e.target.value) })}
+                                            className="w-full appearance-none rounded-xl border border-gray-200 bg-gray-50 py-3 pl-10 pr-4 text-gray-900 outline-none transition-all focus:border-invisi-green focus:bg-white focus:ring-2 focus:ring-green-500/10"
+                                        >
+                                            <option value={1}>1 Minute (Testing)</option>
+                                            <option value={5}>5 Minutes</option>
+                                            <option value={30}>30 Minutes</option>
+                                            <option value={60}>1 Hour</option>
+                                        </select>
                                     </div>
                                 </div>
                             </div>

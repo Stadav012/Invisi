@@ -13,7 +13,7 @@ import logging from "./logging";
 
 const logger = logging("simulator");
 
-const PUBLISH_INTERVAL_MS = 5000;
+const PUBLISH_INTERVAL_MS = 10000;
 
 const supabase = createClient(
     process.env.SUPABASE_URL!,

@@ -34,6 +34,12 @@ interface PodViewProps {
             subLabel?: string;
             progress: number;
         };
+        liveData?: {
+            temperature: number | null;
+            humidity: number | null;
+            ph: number | null;
+            co2: number | null;
+        } | null;
     };
 }
 
@@ -487,16 +493,36 @@ export function PodView({ batch }: PodViewProps) {
                 </div>
 
                 <div className="pointer-events-auto">
-                    <StatItem icon={Thermometer} label="Temperature" value="45.2°C" color="orange" />
+                    <StatItem
+                        icon={Thermometer}
+                        label="Temperature"
+                        value={batch.liveData?.temperature != null ? `${batch.liveData.temperature}°C` : "---"}
+                        color="orange"
+                    />
                 </div>
                 <div className="pointer-events-auto">
-                    <StatItem icon={Droplets} label="Humidity" value="65%" color="blue" />
+                    <StatItem
+                        icon={Droplets}
+                        label="Humidity"
+                        value={batch.liveData?.humidity != null ? `${batch.liveData.humidity}%` : "---"}
+                        color="blue"
+                    />
                 </div>
                 <div className="pointer-events-auto">
-                    <StatItem icon={Activity} label="pH Level" value="5.8" color="purple" />
+                    <StatItem
+                        icon={Activity}
+                        label="pH Level"
+                        value={batch.liveData?.ph != null ? `${batch.liveData.ph}` : "---"}
+                        color="purple"
+                    />
                 </div>
                 <div className="pointer-events-auto">
-                    <StatItem icon={Wind} label="CO2" value="420 ppm" color="green" />
+                    <StatItem
+                        icon={Wind}
+                        label="CO2"
+                        value={batch.liveData?.co2 != null ? `${batch.liveData.co2} ppm` : "---"}
+                        color="green"
+                    />
                 </div>
             </div>
         </div>

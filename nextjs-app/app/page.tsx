@@ -17,6 +17,7 @@ interface Batch {
   variety: string;
   notes: string | null;
   fermentation_start_date: string;
+  recording_interval_mins: number;
   created_at: string;
   updated_at: string;
 }
@@ -184,6 +185,7 @@ export default function Home() {
               batch={{
                 status: activeBatch.status,
                 metrics: batchToMetrics(activeBatch, liveReading),
+                liveData: liveReading,
               }}
             />
           ) : (

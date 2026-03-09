@@ -32,6 +32,7 @@ export async function POST(request: NextRequest) {
             variety: body.variety || "Amelonado",
             notes: body.notes || null,
             fermentation_start_date: body.date || new Date().toISOString().split("T")[0],
+            recording_interval_mins: body.recording_interval_mins ? parseInt(body.recording_interval_mins) : 5,
             status: "fermenting",
         })
         .select()

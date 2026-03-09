@@ -1,6 +1,8 @@
 import { supabase } from "@/lib/supabase/client";
 import { NextRequest, NextResponse } from "next/server";
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const batchId = searchParams.get("batch_id");
