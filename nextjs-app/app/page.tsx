@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Header } from "@/components/Header";
 import { BottomNav } from "@/components/BottomNav";
 import { PodView } from "@/components/PodView";
@@ -21,25 +21,36 @@ interface Batch {
   updated_at: string;
 }
 
+interface SensorReading {
+  temperature: number | null;
+  humidity: number | null;
+  ph: number | null;
+  co2: number | null;
+  recorded_at: string;
+}
+
 function daysSince(dateStr: string): number {
   const start = new Date(dateStr);
   const now = new Date();
   return Math.max(1, Math.ceil((now.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)));
 }
 
-function batchToMetrics(batch: Batch) {
+function batchToMetrics(batch: Batch, liveReading?: SensorReading | null) {
   const days = daysSince(batch.fermentation_start_date);
   const totalDays = 6;
 
   switch (batch.status) {
-    case "fermenting":
+    case "fermenting": {
+      const temp = liveReading?.temperature ?? null;
+      const tempLabel = temp !== null ? `${temp}°C Temp` : "Awaiting data...";
       return {
         label: "Progress",
         value: `Day ${days} of ${totalDays}`,
         progress: Math.min(100, (days / totalDays) * 100),
         subIcon: Thermometer,
-        subLabel: "45°C Temp",
+        subLabel: tempLabel,
       };
+    }
     case "drying":
       return {
         label: "Moisture",
@@ -70,6 +81,8 @@ export default function Home() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [batches, setBatches] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(true);
+  const [liveReading, setLiveReading] = useState<SensorReading | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchBatches = useCallback(async () => {
     try {
@@ -89,6 +102,31 @@ export default function Home() {
   }, [fetchBatches]);
 
   const activeBatch = batches.find((b) => b.status === "fermenting") || null;
+
+  // Poll live sensor readings for the active batch
+  useEffect(() => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    if (!activeBatch) {
+      setLiveReading(null);
+      return;
+    }
+
+    const fetchReading = async () => {
+      try {
+        const res = await fetch(`/api/readings?batch_id=${activeBatch.id}&limit=1`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.length > 0) setLiveReading(data[0]);
+      } catch { /* silent */ }
+    };
+
+    fetchReading();
+    pollRef.current = setInterval(fetchReading, 10_000);
+
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [activeBatch?.id]);
 
   const handleAddNewBatch = async (data: NewBatchData) => {
     try {
@@ -145,7 +183,7 @@ export default function Home() {
             <PodView
               batch={{
                 status: activeBatch.status,
-                metrics: batchToMetrics(activeBatch),
+                metrics: batchToMetrics(activeBatch, liveReading),
               }}
             />
           ) : (
