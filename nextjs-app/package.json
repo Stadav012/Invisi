@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "concurrently \"next dev\" \"bun run telemetry/index.ts\"",
+    "dev:next": "next dev",
+    "dev:telemetry": "bun run telemetry/index.ts",
+    "simulate": "bun run telemetry/simulator.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
@@ -13,8 +16,11 @@
     "@react-three/fiber": "^9.5.0",
     "@supabase/supabase-js": "^2.98.0",
     "@types/three": "^0.182.0",
+    "@upstash/redis": "^1.36.4",
+    "concurrently": "^9.2.1",
     "framer-motion": "^12.24.10",
     "lucide-react": "^0.562.0",
+    "mqtt": "^5.15.0",
     "next": "16.1.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",
