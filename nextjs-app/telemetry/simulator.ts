@@ -6,7 +6,7 @@
  * Requires an active fermenting batch in Supabase. If none exists,
  * connects but skips publishing and logs a warning.
  */
-import "dotenv/config";
+
 import mqtt from "mqtt";
 import { createClient } from "@supabase/supabase-js";
 import logging from "./logging";

@@ -1,4 +1,4 @@
-import "dotenv/config";
+
 import { Redis } from "@upstash/redis";
 import { createClient } from "@supabase/supabase-js";
 import logging from "./logging";

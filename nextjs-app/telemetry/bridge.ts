@@ -1,4 +1,4 @@
-import "dotenv/config";
+
 import mqtt from "mqtt";
 import { Redis } from "@upstash/redis";
 import logging from "./logging";

@@ -1,4 +1,4 @@
-import "dotenv/config";
+
 import { startBridge } from "./bridge";
 import { startConsumer } from "./consumer";
 import logging from "./logging";
