@@ -223,7 +223,7 @@ function MetricConnectors({ sensorRefs }: { sensorRefs: React.MutableRefObject<T
             {configs.map((config, i) => (
                 <group key={i}>
                     <line>
-                        <bufferGeometry ref={(el) => { lineGeomRefs.current[i] = el; }} />
+                        <bufferGeometry ref={(el: THREE.BufferGeometry | null) => { lineGeomRefs.current[i] = el; }} />
                         <lineBasicMaterial color={config.color} transparent opacity={0.8} linewidth={2} />
                     </line>
                     {/* Glowing endpoint dot at the Line Start (the "Screen" end) */}
