@@ -1,12 +1,13 @@
 services:
-  - type: worker
+  - type: web
     name: invisi-telemetry
     runtime: node
-    region: frankfurt
+    region: oregon
     plan: free
     rootDir: nextjs-app
-    buildCommand: bun install
-    startCommand: bun run telemetry/index.ts
+    buildCommand: npm install && npm install tsx
+    startCommand: npx tsx telemetry/index.ts
+    healthCheckPath: /health
     envVars:
       - key: MQTT_BROKER_URL
         sync: false
