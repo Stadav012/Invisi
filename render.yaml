@@ -1,0 +1,28 @@
+services:
+  - type: worker
+    name: invisi-telemetry
+    runtime: node
+    region: frankfurt
+    plan: free
+    rootDir: nextjs-app
+    buildCommand: bun install
+    startCommand: bun run telemetry/index.ts
+    envVars:
+      - key: MQTT_BROKER_URL
+        sync: false
+      - key: MQTT_USERNAME
+        sync: false
+      - key: MQTT_PASSWORD
+        sync: false
+      - key: MQTT_TOPIC
+        sync: false
+      - key: UPSTASH_REDIS_URL
+        sync: false
+      - key: UPSTASH_REDIS_TOKEN
+        sync: false
+      - key: REDIS_STREAM_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
