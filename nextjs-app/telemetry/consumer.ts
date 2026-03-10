@@ -7,7 +7,6 @@ const logger = logging("consumer");
 const REDIS_STREAM_KEY = process.env.REDIS_STREAM_KEY || "sensor-readings";
 const CONSUMER_GROUP = "supabase-writers";
 const CONSUMER_NAME = "writer-1";
-// Check every 30 seconds for any batches that need aggregating
 const CHECK_INTERVAL_MS = 30000;
 
 const redis = new Redis({
@@ -20,13 +19,20 @@ const supabase = createClient(
     process.env.SUPABASE_KEY!
 );
 
+// All numeric sensor fields we track per-position
+const SENSOR_FIELDS = [
+    "temp_center", "temp_left", "temp_right",
+    "gas_left", "gas_right",
+    // Legacy fields kept for backward compat
+    "temperature", "humidity", "ph", "co2"
+] as const;
+
+type SensorField = typeof SENSOR_FIELDS[number];
+
 interface ReadingRow {
     batch_id: string;
-    temperature: number | null;
-    humidity: number | null;
-    ph: number | null;
-    co2: number | null;
     recorded_at: string;
+    [key: string]: string | number | null;
 }
 
 async function ensureConsumerGroup() {
@@ -60,30 +66,38 @@ function parseRedisResponse(response: any): { id: string; data: ReadingRow }[] {
             const id = entry[0] as string;
             const fieldArray = entry[1] as any[];
 
-            const data: Record<string, string> = {};
+            const raw: Record<string, string> = {};
             for (let i = 0; i < fieldArray.length; i += 2) {
-                data[fieldArray[i]] = String(fieldArray[i + 1]);
+                raw[fieldArray[i]] = String(fieldArray[i + 1]);
             }
 
-            results.push({
-                id,
-                data: {
-                    batch_id: data.batch_id,
-                    temperature: parseNumber(data.temperature),
-                    humidity: parseNumber(data.humidity),
-                    ph: parseNumber(data.ph),
-                    co2: parseNumber(data.co2),
-                    recorded_at: data.recorded_at || new Date().toISOString(),
-                },
-            });
+            const data: ReadingRow = {
+                batch_id: raw.batch_id,
+                recorded_at: raw.recorded_at || new Date().toISOString(),
+            };
+
+            for (const field of SENSOR_FIELDS) {
+                data[field] = parseNumber(raw[field]);
+            }
+
+            results.push({ id, data });
         }
     }
     return results;
 }
 
+async function deleteFromRedis(ids: string[]) {
+    await redis.xack(REDIS_STREAM_KEY, CONSUMER_GROUP, ids);
+    for (let i = 0; i < ids.length; i += 100) {
+        const chunk = ids.slice(i, i + 100);
+        if (chunk.length > 0) {
+            await (redis.xdel as any)(REDIS_STREAM_KEY, ...chunk);
+        }
+    }
+}
+
 async function performAggregation() {
     try {
-        // 1. Fetch active batches and their intervals
         const { data: batches } = await supabase
             .from("batches")
             .select("id, recording_interval_mins")
@@ -93,7 +107,6 @@ async function performAggregation() {
 
         const batchMap = new Map(batches.map(b => [b.id, b]));
 
-        // 2. Fetch the latest reading time for each active batch
         const lastReadingsMap = new Map<string, number>();
         await Promise.all(batches.map(async b => {
             const { data } = await supabase
@@ -107,7 +120,6 @@ async function performAggregation() {
             lastReadingsMap.set(b.id, data ? new Date(data.recorded_at).getTime() : 0);
         }));
 
-        // 3. Read pending (0) and new (>) messages
         const [pendingRes, newRes] = await Promise.all([
             redis.xreadgroup(CONSUMER_GROUP, CONSUMER_NAME, REDIS_STREAM_KEY, "0", { count: 5000 }),
             redis.xreadgroup(CONSUMER_GROUP, CONSUMER_NAME, REDIS_STREAM_KEY, ">", { count: 5000 })
@@ -116,27 +128,17 @@ async function performAggregation() {
         const allMessages = [...parseRedisResponse(pendingRes), ...parseRedisResponse(newRes)];
         if (allMessages.length === 0) return;
 
-        // 4. Group by batch_id
         const messagesByBatch = new Map<string, typeof allMessages>();
         for (const msg of allMessages) {
             if (!messagesByBatch.has(msg.data.batch_id)) messagesByBatch.set(msg.data.batch_id, []);
             messagesByBatch.get(msg.data.batch_id)!.push(msg);
         }
 
-        // 5. Aggregate and insert
         for (const [batch_id, msgs] of messagesByBatch.entries()) {
             const batchInfo = batchMap.get(batch_id);
 
-            // If batch is deleted or no longer fermenting, clear its messages to free up Redis
             if (!batchInfo) {
-                const ids = msgs.map(m => m.id);
-                await redis.xack(REDIS_STREAM_KEY, CONSUMER_GROUP, ids);
-                for (let i = 0; i < ids.length; i += 100) {
-                    const chunk = ids.slice(i, i + 100);
-                    if (chunk.length > 0) {
-                        await (redis.xdel as any)(REDIS_STREAM_KEY, ...chunk);
-                    }
-                }
+                await deleteFromRedis(msgs.map(m => m.id));
                 continue;
             }
 
@@ -145,39 +147,49 @@ async function performAggregation() {
             const lastRecordedAt = lastReadingsMap.get(batch_id) || 0;
             const now = Date.now();
 
-            // Check if enough time has passed to aggregate
             if (now - lastRecordedAt >= intervalMs) {
-                let sumTemp = 0, sumHum = 0, sumPh = 0, sumCo2 = 0;
-                let countTemp = 0, countHum = 0, countPh = 0, countCo2 = 0;
+                // Aggregate each sensor field independently
+                const sums: Record<string, number> = {};
+                const counts: Record<string, number> = {};
 
-                for (const msg of msgs) {
-                    if (msg.data.temperature !== null) { sumTemp += msg.data.temperature; countTemp++; }
-                    if (msg.data.humidity !== null) { sumHum += msg.data.humidity; countHum++; }
-                    if (msg.data.ph !== null) { sumPh += msg.data.ph; countPh++; }
-                    if (msg.data.co2 !== null) { sumCo2 += msg.data.co2; countCo2++; }
+                for (const field of SENSOR_FIELDS) {
+                    sums[field] = 0;
+                    counts[field] = 0;
                 }
 
-                if (countTemp === 0 && countHum === 0 && countPh === 0 && countCo2 === 0) {
-                    // Empty data payload edgecase
-                    const ids = msgs.map(m => m.id);
-                    await redis.xack(REDIS_STREAM_KEY, CONSUMER_GROUP, ids);
-                    for (let i = 0; i < ids.length; i += 100) {
-                        const chunk = ids.slice(i, i + 100);
-                        if (chunk.length > 0) {
-                            await (redis.xdel as any)(REDIS_STREAM_KEY, ...chunk);
+                for (const msg of msgs) {
+                    for (const field of SENSOR_FIELDS) {
+                        const val = msg.data[field];
+                        if (val !== null && val !== undefined && typeof val === "number") {
+                            sums[field] += val;
+                            counts[field]++;
                         }
                     }
+                }
+
+                // Check if we have any data at all
+                const hasAnyData = SENSOR_FIELDS.some(f => counts[f] > 0);
+                if (!hasAnyData) {
+                    await deleteFromRedis(msgs.map(m => m.id));
                     continue;
                 }
 
-                const aggRow = {
+                const aggRow: Record<string, any> = {
                     batch_id,
-                    temperature: countTemp > 0 ? parseFloat((sumTemp / countTemp).toFixed(2)) : null,
-                    humidity: countHum > 0 ? parseFloat((sumHum / countHum).toFixed(2)) : null,
-                    ph: countPh > 0 ? parseFloat((sumPh / countPh).toFixed(2)) : null,
-                    co2: countCo2 > 0 ? Math.round(sumCo2 / countCo2) : null,
-                    recorded_at: new Date().toISOString()
+                    recorded_at: new Date().toISOString(),
                 };
+
+                for (const field of SENSOR_FIELDS) {
+                    if (counts[field] > 0) {
+                        const avg = sums[field] / counts[field];
+                        // Use 2 decimal places for temperatures, round integers for gas
+                        aggRow[field] = field.startsWith("gas_")
+                            ? Math.round(avg)
+                            : parseFloat(avg.toFixed(2));
+                    } else {
+                        aggRow[field] = null;
+                    }
+                }
 
                 const { error } = await supabase.from("sensor_readings").insert(aggRow);
 
@@ -185,15 +197,7 @@ async function performAggregation() {
                     logger.error(`Supabase insert failed for batch ${batch_id}: ${error.message}`);
                 } else {
                     logger.info(`Aggregated ${msgs.length} readings for batch ${batch_id}`);
-                    // Acknowledge and delete processed messages from Redis
-                    const ids = msgs.map(m => m.id);
-                    await redis.xack(REDIS_STREAM_KEY, CONSUMER_GROUP, ids);
-                    for (let i = 0; i < ids.length; i += 100) {
-                        const chunk = ids.slice(i, i + 100);
-                        if (chunk.length > 0) {
-                            await (redis.xdel as any)(REDIS_STREAM_KEY, ...chunk);
-                        }
-                    }
+                    await deleteFromRedis(msgs.map(m => m.id));
                 }
             }
         }
@@ -207,9 +211,6 @@ export async function startConsumer() {
 
     logger.info("Aggregating Consumer started...");
 
-    // Initial run
     await performAggregation();
-
-    // Periodic interval
     setInterval(performAggregation, CHECK_INTERVAL_MS);
 }

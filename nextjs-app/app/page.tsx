@@ -23,6 +23,12 @@ interface Batch {
 }
 
 interface SensorReading {
+  temp_center: number | null;
+  temp_left: number | null;
+  temp_right: number | null;
+  gas_left: number | null;
+  gas_right: number | null;
+  // Legacy fields
   temperature: number | null;
   humidity: number | null;
   ph: number | null;
@@ -42,8 +48,8 @@ function batchToMetrics(batch: Batch, liveReading?: SensorReading | null) {
 
   switch (batch.status) {
     case "fermenting": {
-      const temp = liveReading?.temperature ?? null;
-      const tempLabel = temp !== null ? `${temp}°C Temp` : "Awaiting data...";
+      const temp = liveReading?.temp_center ?? liveReading?.temperature ?? null;
+      const tempLabel = temp !== null ? `${temp}°C Core` : "Awaiting data...";
       return {
         label: "Progress",
         value: `Day ${days} of ${totalDays}`,
@@ -185,7 +191,13 @@ export default function Home() {
               batch={{
                 status: activeBatch.status,
                 metrics: batchToMetrics(activeBatch, liveReading),
-                liveData: liveReading,
+                liveData: liveReading ? {
+                  temp_center: liveReading.temp_center,
+                  temp_left: liveReading.temp_left,
+                  temp_right: liveReading.temp_right,
+                  gas_left: liveReading.gas_left,
+                  gas_right: liveReading.gas_right,
+                } : null,
               }}
             />
           ) : (

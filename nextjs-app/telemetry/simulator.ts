@@ -1,10 +1,9 @@
 /**
- * Sensor simulator — publishes fake telemetry to MQTT for dev testing.
+ * Sensor simulator — publishes fake position-aware telemetry to MQTT for dev testing.
  *
- * Usage: npm run simulate
+ * Usage: bun run simulate
  *
- * Requires an active fermenting batch in Supabase. If none exists,
- * connects but skips publishing and logs a warning.
+ * Requires an active fermenting batch in Supabase.
  */
 
 import mqtt from "mqtt";
@@ -24,28 +23,31 @@ function clamp(val: number, min: number, max: number) {
     return Math.max(min, Math.min(max, val));
 }
 
-// Sensor state that drifts realistically
-let temp = 45;
-let humidity = 85;
-let ph = 4.5;
-let co2 = 2500;
+// Simulated sensor state — center runs hotter than edges
+let tempCenter = 47;
+let tempLeft = 43;
+let tempRight = 42;
+let gasLeft = 2200;
+let gasRight = 2000;
 
 function nextReading() {
-    temp = clamp(temp + (Math.random() - 0.48) * 1.5, 35, 55);
-    humidity = clamp(humidity + (Math.random() - 0.5) * 3, 60, 98);
-    ph = clamp(ph + (Math.random() - 0.52) * 0.2, 3.5, 6.0);
-    co2 = clamp(co2 + (Math.random() - 0.5) * 200, 1000, 5000);
+    // Center drifts higher (exothermic core), edges drift lower
+    tempCenter = clamp(tempCenter + (Math.random() - 0.45) * 1.5, 40, 55);
+    tempLeft = clamp(tempLeft + (Math.random() - 0.5) * 1.2, 35, 50);
+    tempRight = clamp(tempRight + (Math.random() - 0.5) * 1.2, 35, 50);
+    gasLeft = clamp(gasLeft + (Math.random() - 0.5) * 150, 800, 4000);
+    gasRight = clamp(gasRight + (Math.random() - 0.5) * 150, 800, 4000);
 
     return {
-        temperature: parseFloat(temp.toFixed(1)),
-        humidity: parseFloat(humidity.toFixed(1)),
-        ph: parseFloat(ph.toFixed(2)),
-        co2: Math.round(co2),
+        temp_center: parseFloat(tempCenter.toFixed(1)),
+        temp_left: parseFloat(tempLeft.toFixed(1)),
+        temp_right: parseFloat(tempRight.toFixed(1)),
+        gas_left: Math.round(gasLeft),
+        gas_right: Math.round(gasRight),
     };
 }
 
 async function main() {
-    // Find an active fermenting batch
     const { data: batch, error } = await supabase
         .from("batches")
         .select("id, batch_number")
@@ -86,8 +88,8 @@ async function main() {
                     return;
                 }
                 logger.info(
-                    `Published: temp=${reading.temperature} hum=${reading.humidity} ` +
-                    `ph=${reading.ph} co2=${reading.co2}`
+                    `Published: tc=${reading.temp_center} tl=${reading.temp_left} ` +
+                    `tr=${reading.temp_right} gl=${reading.gas_left} gr=${reading.gas_right}`
                 );
             });
         }, PUBLISH_INTERVAL_MS);

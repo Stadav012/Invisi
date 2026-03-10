@@ -16,7 +16,7 @@ import {
 } from "@react-three/drei";
 import * as THREE from "three";
 import { BatchStatus } from "./BatchCard";
-import { Thermometer, Droplets, Wind, Activity, LucideIcon } from "lucide-react";
+import { Thermometer, Droplets, Wind, Activity, LucideIcon, AlertTriangle } from "lucide-react";
 
 /**
  * PodView Component
@@ -35,10 +35,11 @@ interface PodViewProps {
             progress: number;
         };
         liveData?: {
-            temperature: number | null;
-            humidity: number | null;
-            ph: number | null;
-            co2: number | null;
+            temp_center: number | null;
+            temp_left: number | null;
+            temp_right: number | null;
+            gas_left: number | null;
+            gas_right: number | null;
         } | null;
     };
 }
@@ -495,32 +496,58 @@ export function PodView({ batch }: PodViewProps) {
                 <div className="pointer-events-auto">
                     <StatItem
                         icon={Thermometer}
-                        label="Temperature"
-                        value={batch.liveData?.temperature != null ? `${batch.liveData.temperature}°C` : "---"}
+                        label="Core Temp"
+                        value={batch.liveData?.temp_center != null ? `${batch.liveData.temp_center}°C` : "---"}
                         color="orange"
                     />
                 </div>
-                <div className="pointer-events-auto">
+                <div className="pointer-events-auto flex gap-2">
                     <StatItem
-                        icon={Droplets}
-                        label="Humidity"
-                        value={batch.liveData?.humidity != null ? `${batch.liveData.humidity}%` : "---"}
+                        icon={Thermometer}
+                        label="Left"
+                        value={batch.liveData?.temp_left != null ? `${batch.liveData.temp_left}°C` : "---"}
+                        color="blue"
+                    />
+                    <StatItem
+                        icon={Thermometer}
+                        label="Right"
+                        value={batch.liveData?.temp_right != null ? `${batch.liveData.temp_right}°C` : "---"}
                         color="blue"
                     />
                 </div>
-                <div className="pointer-events-auto">
-                    <StatItem
-                        icon={Activity}
-                        label="pH Level"
-                        value={batch.liveData?.ph != null ? `${batch.liveData.ph}` : "---"}
-                        color="purple"
-                    />
-                </div>
-                <div className="pointer-events-auto">
+                {(() => {
+                    const d = batch.liveData;
+                    if (d?.temp_center != null && (d?.temp_left != null || d?.temp_right != null)) {
+                        const edges: number[] = [];
+                        if (d.temp_left != null) edges.push(d.temp_left);
+                        if (d.temp_right != null) edges.push(d.temp_right);
+                        const edgeAvg = edges.reduce((a, b) => a + b, 0) / edges.length;
+                        const gradient = parseFloat((d.temp_center - edgeAvg).toFixed(1));
+                        const needsTurning = gradient > 5;
+                        return (
+                            <div className="pointer-events-auto">
+                                <StatItem
+                                    icon={needsTurning ? AlertTriangle : Activity}
+                                    label={needsTurning ? "Turn Now!" : "Gradient"}
+                                    value={`Δ ${gradient}°C`}
+                                    color={needsTurning ? "red" : "green"}
+                                />
+                            </div>
+                        );
+                    }
+                    return null;
+                })()}
+                <div className="pointer-events-auto flex gap-2">
                     <StatItem
                         icon={Wind}
-                        label="CO2"
-                        value={batch.liveData?.co2 != null ? `${batch.liveData.co2} ppm` : "---"}
+                        label="Gas L"
+                        value={batch.liveData?.gas_left != null ? `${batch.liveData.gas_left}` : "---"}
+                        color="green"
+                    />
+                    <StatItem
+                        icon={Wind}
+                        label="Gas R"
+                        value={batch.liveData?.gas_right != null ? `${batch.liveData.gas_right}` : "---"}
                         color="green"
                     />
                 </div>
