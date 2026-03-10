@@ -7,7 +7,7 @@ const logger = logging("consumer");
 const REDIS_STREAM_KEY = process.env.REDIS_STREAM_KEY || "sensor-readings";
 const CONSUMER_GROUP = "supabase-writers";
 const CONSUMER_NAME = "writer-1";
-const CHECK_INTERVAL_MS = 30000;
+const POLL_INTERVAL_MS = 10000; // Check Redis every 10 seconds
 
 const redis = new Redis({
     url: process.env.UPSTASH_REDIS_URL!,
@@ -19,21 +19,11 @@ const supabase = createClient(
     process.env.SUPABASE_KEY!
 );
 
-// All numeric sensor fields we track per-position
 const SENSOR_FIELDS = [
     "temp_center", "temp_left", "temp_right",
     "gas_left", "gas_right",
-    // Legacy fields kept for backward compat
     "temperature", "humidity", "ph", "co2"
 ] as const;
-
-type SensorField = typeof SENSOR_FIELDS[number];
-
-interface ReadingRow {
-    batch_id: string;
-    recorded_at: string;
-    [key: string]: string | number | null;
-}
 
 async function ensureConsumerGroup() {
     try {
@@ -56,8 +46,13 @@ function parseNumber(val: string | undefined): number | null {
     return isNaN(n) ? null : n;
 }
 
-function parseRedisResponse(response: any): { id: string; data: ReadingRow }[] {
-    const results: { id: string; data: ReadingRow }[] = [];
+interface ParsedMessage {
+    id: string;
+    data: Record<string, any>;
+}
+
+function parseRedisResponse(response: any): ParsedMessage[] {
+    const results: ParsedMessage[] = [];
     if (!response || response.length === 0 || (response[0] as any)[1].length === 0) return results;
 
     for (const stream of response) {
@@ -71,7 +66,7 @@ function parseRedisResponse(response: any): { id: string; data: ReadingRow }[] {
                 raw[fieldArray[i]] = String(fieldArray[i + 1]);
             }
 
-            const data: ReadingRow = {
+            const data: Record<string, any> = {
                 batch_id: raw.batch_id,
                 recorded_at: raw.recorded_at || new Date().toISOString(),
             };
@@ -96,121 +91,46 @@ async function deleteFromRedis(ids: string[]) {
     }
 }
 
-async function performAggregation() {
+async function processMessages() {
     try {
-        const { data: batches } = await supabase
-            .from("batches")
-            .select("id, recording_interval_mins")
-            .eq("status", "fermenting");
-
-        if (!batches || batches.length === 0) return;
-
-        const batchMap = new Map(batches.map(b => [b.id, b]));
-
-        const lastReadingsMap = new Map<string, number>();
-        await Promise.all(batches.map(async b => {
-            const { data } = await supabase
-                .from("sensor_readings")
-                .select("recorded_at")
-                .eq("batch_id", b.id)
-                .order("recorded_at", { ascending: false })
-                .limit(1)
-                .single();
-
-            lastReadingsMap.set(b.id, data ? new Date(data.recorded_at).getTime() : 0);
-        }));
-
+        // Read pending and new messages
         const [pendingRes, newRes] = await Promise.all([
-            redis.xreadgroup(CONSUMER_GROUP, CONSUMER_NAME, REDIS_STREAM_KEY, "0", { count: 5000 }),
-            redis.xreadgroup(CONSUMER_GROUP, CONSUMER_NAME, REDIS_STREAM_KEY, ">", { count: 5000 })
+            redis.xreadgroup(CONSUMER_GROUP, CONSUMER_NAME, REDIS_STREAM_KEY, "0", { count: 100 }),
+            redis.xreadgroup(CONSUMER_GROUP, CONSUMER_NAME, REDIS_STREAM_KEY, ">", { count: 100 })
         ]);
 
         const allMessages = [...parseRedisResponse(pendingRes), ...parseRedisResponse(newRes)];
         if (allMessages.length === 0) return;
 
-        const messagesByBatch = new Map<string, typeof allMessages>();
+        // Direct pass-through: write each reading individually to Supabase
         for (const msg of allMessages) {
-            if (!messagesByBatch.has(msg.data.batch_id)) messagesByBatch.set(msg.data.batch_id, []);
-            messagesByBatch.get(msg.data.batch_id)!.push(msg);
-        }
-
-        for (const [batch_id, msgs] of messagesByBatch.entries()) {
-            const batchInfo = batchMap.get(batch_id);
-
-            if (!batchInfo) {
-                await deleteFromRedis(msgs.map(m => m.id));
+            if (!msg.data.batch_id) {
+                await deleteFromRedis([msg.id]);
                 continue;
             }
 
-            const intervalMins = batchInfo.recording_interval_mins || 1;
-            const intervalMs = intervalMins * 60 * 1000;
-            const lastRecordedAt = lastReadingsMap.get(batch_id) || 0;
-            const now = Date.now();
+            const { error } = await supabase.from("sensor_readings").insert(msg.data);
 
-            if (now - lastRecordedAt >= intervalMs) {
-                // Aggregate each sensor field independently
-                const sums: Record<string, number> = {};
-                const counts: Record<string, number> = {};
-
-                for (const field of SENSOR_FIELDS) {
-                    sums[field] = 0;
-                    counts[field] = 0;
-                }
-
-                for (const msg of msgs) {
-                    for (const field of SENSOR_FIELDS) {
-                        const val = msg.data[field];
-                        if (val !== null && val !== undefined && typeof val === "number") {
-                            sums[field] += val;
-                            counts[field]++;
-                        }
-                    }
-                }
-
-                // Check if we have any data at all
-                const hasAnyData = SENSOR_FIELDS.some(f => counts[f] > 0);
-                if (!hasAnyData) {
-                    await deleteFromRedis(msgs.map(m => m.id));
-                    continue;
-                }
-
-                const aggRow: Record<string, any> = {
-                    batch_id,
-                    recorded_at: new Date().toISOString(),
-                };
-
-                for (const field of SENSOR_FIELDS) {
-                    if (counts[field] > 0) {
-                        const avg = sums[field] / counts[field];
-                        // Use 2 decimal places for temperatures, round integers for gas
-                        aggRow[field] = field.startsWith("gas_")
-                            ? Math.round(avg)
-                            : parseFloat(avg.toFixed(2));
-                    } else {
-                        aggRow[field] = null;
-                    }
-                }
-
-                const { error } = await supabase.from("sensor_readings").insert(aggRow);
-
-                if (error) {
-                    logger.error(`Supabase insert failed for batch ${batch_id}: ${error.message}`);
-                } else {
-                    logger.info(`Aggregated ${msgs.length} readings for batch ${batch_id}`);
-                    await deleteFromRedis(msgs.map(m => m.id));
-                }
+            if (error) {
+                logger.error(`Insert failed for ${msg.data.batch_id}: ${error.message}`);
+            } else {
+                logger.info(
+                    `Stored reading for batch ${msg.data.batch_id}: ` +
+                    `tc=${msg.data.temp_center} tl=${msg.data.temp_left} tr=${msg.data.temp_right} ` +
+                    `gl=${msg.data.gas_left} gr=${msg.data.gas_right}`
+                );
+                await deleteFromRedis([msg.id]);
             }
         }
     } catch (err) {
-        logger.error(`Aggregation error: ${err}`);
+        logger.error(`Consumer error: ${err}`);
     }
 }
 
 export async function startConsumer() {
     await ensureConsumerGroup();
+    logger.info("Direct pass-through consumer started...");
 
-    logger.info("Aggregating Consumer started...");
-
-    await performAggregation();
-    setInterval(performAggregation, CHECK_INTERVAL_MS);
+    await processMessages();
+    setInterval(processMessages, POLL_INTERVAL_MS);
 }
