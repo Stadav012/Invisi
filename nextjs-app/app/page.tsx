@@ -1,10 +1,12 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Header } from "@/components/Header";
 import { BottomNav } from "@/components/BottomNav";
 import { PodView } from "@/components/PodView";
+import { ThermalChart } from "@/components/ThermalChart";
+import { TurnAlert } from "@/components/TurnAlert";
 import { BatchStatus } from "@/components/BatchCard";
 import { NewBatchModal, NewBatchData } from "@/components/NewBatchModal";
 import { Plus, Thermometer, Loader2, Sprout, Trash2 } from "lucide-react";
@@ -89,6 +91,8 @@ export default function Home() {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(true);
   const [liveReading, setLiveReading] = useState<SensorReading | null>(null);
+  const [hourlyData, setHourlyData] = useState<any[]>([]);
+  const [alertDismissed, setAlertDismissed] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchBatches = useCallback(async () => {
@@ -135,6 +139,48 @@ export default function Home() {
     };
   }, [activeBatch?.id]);
 
+  // Fetch hourly rollup data for thermal chart
+  useEffect(() => {
+    if (!activeBatch) {
+      setHourlyData([]);
+      return;
+    }
+
+    const fetchHourly = async () => {
+      try {
+        const res = await fetch(`/api/readings/hourly?batch_id=${activeBatch.id}&hours=48`);
+        if (!res.ok) return;
+        const data = await res.json();
+        setHourlyData(data);
+      } catch { /* silent */ }
+    };
+
+    fetchHourly();
+    const interval = setInterval(fetchHourly, 60_000); // Refresh chart every minute
+    return () => clearInterval(interval);
+  }, [activeBatch?.id]);
+
+  // Compute current thermal gradient for the turn alert
+  const currentGradient = useMemo(() => {
+    const d = liveReading;
+    if (!d?.temp_center) return null;
+    const edges: number[] = [];
+    if (d.temp_left != null) edges.push(d.temp_left);
+    if (d.temp_right != null) edges.push(d.temp_right);
+    if (edges.length === 0) return null;
+    const edgeAvg = edges.reduce((a, b) => a + b, 0) / edges.length;
+    return parseFloat((d.temp_center - edgeAvg).toFixed(1));
+  }, [liveReading]);
+
+  const showTurnAlert = currentGradient != null && currentGradient > 5 && !alertDismissed;
+
+  // Reset alert dismissal when gradient drops back below threshold
+  useEffect(() => {
+    if (currentGradient != null && currentGradient <= 5) {
+      setAlertDismissed(false);
+    }
+  }, [currentGradient]);
+
   const handleAddNewBatch = async (data: NewBatchData) => {
     try {
       const res = await fetch("/api/batches", {
@@ -170,6 +216,9 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-invisi-light pb-32 font-sans text-gray-900">
+      {showTurnAlert && currentGradient != null && (
+        <TurnAlert gradient={currentGradient} onDismiss={() => setAlertDismissed(true)} />
+      )}
       <Header />
 
       <motion.main
@@ -215,6 +264,16 @@ export default function Home() {
             </div>
           )}
         </motion.div>
+
+        {/* Thermal Analysis Chart — only if fermenting */}
+        {activeBatch && activeBatch.status === "fermenting" && (
+          <motion.div
+            variants={{ hidden: { y: 20, opacity: 0 }, visible: { y: 0, opacity: 1 } }}
+            className="w-full mb-12"
+          >
+            <ThermalChart data={hourlyData} />
+          </motion.div>
+        )}
 
         {/* Batch Status List */}
         <div>
