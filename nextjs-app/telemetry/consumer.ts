@@ -112,7 +112,13 @@ async function processMessages() {
             const { error } = await supabase.from("sensor_readings").insert(msg.data);
 
             if (error) {
-                logger.error(`Insert failed for ${msg.data.batch_id}: ${error.message}`);
+                // Batch was deleted — discard orphaned readings instead of retrying
+                if (error.message.includes("foreign key")) {
+                    logger.info(`Batch ${msg.data.batch_id} no longer exists, discarding reading`);
+                    await deleteFromRedis([msg.id]);
+                } else {
+                    logger.error(`Insert failed for ${msg.data.batch_id}: ${error.message}`);
+                }
             } else {
                 logger.info(
                     `Stored reading for batch ${msg.data.batch_id}: ` +
