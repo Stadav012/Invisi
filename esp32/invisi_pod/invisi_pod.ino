@@ -290,8 +290,8 @@ void setup() {
 
   Serial.println(payload);
 
-  if (client.publish("invisi/pod/data", payload.c_str())) {
-    Serial.println("Published");
+  if (client.publish("invisi/pod/pod_01/telemetry", payload.c_str())) {
+    Serial.println("Published to telemetry topic");
   } else {
     Serial.println("Publish failed");
   }
