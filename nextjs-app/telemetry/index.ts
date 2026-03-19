@@ -11,10 +11,7 @@ const startedAt = new Date().toISOString();
 async function main() {
     logger.info("Starting Invisi telemetry pipeline...");
 
-    startBridge();
-    await startConsumer();
-
-    // Health check server — keeps Render free web service alive
+    // 1. Start health check server IMMEDIATELY so Render is happy
     const server = createServer((req, res) => {
         if (req.url === "/health" || req.url === "/") {
             res.writeHead(200, { "Content-Type": "application/json" });
@@ -33,6 +30,10 @@ async function main() {
     server.listen(PORT, () => {
         logger.info(`Health check server on port ${PORT}`);
     });
+
+    // 2. Start background workers
+    startBridge();
+    await startConsumer();
 }
 
 main().catch((err) => {

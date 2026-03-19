@@ -4,13 +4,16 @@
 #include <PubSubClient.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include "esp_wpa2.h"
 
 // =========================================================================
 // 1. CONFIGURATION
 // =========================================================================
 
-const char *ssid = "ASHESI-GUEST";
-const char *password = "7daysaWEEK";
+
+const char* ssid = "MTN_4G_487D38";
+const char* password = "Ilovetobecalledtrymore123!";
+
 
 const char *mqtt_server = "175d3f6bef384d07b45f87e538953408.s1.eu.hivemq.cloud";
 const int mqtt_port = 8883;
@@ -133,56 +136,76 @@ void readAllSensors() {
 // 5. NETWORK HELPERS
 // =========================================================================
 
-void connectWiFi() {
-  Serial.print("WiFi: ");
-  Serial.println(ssid);
+bool connectWiFi() {
+  Serial.println("Connecting to WiFi...");
+
+  WiFi.disconnect(true);
   WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
 
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 40) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
+  int retries = 0;
+
+  while (retries < 3) {   // 🔁 retry full connection 3 times
+    WiFi.begin(ssid, password);
+
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+      delay(500);
+      Serial.print(".");
+      attempts++;
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\nWiFi Connected!");
+      Serial.println(WiFi.localIP());
+      return true;
+    }
+
+    Serial.println("\nRetrying WiFi...");
+    retries++;
+    delay(2000);
   }
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nConnected! IP: " + WiFi.localIP().toString());
-  } else {
-    Serial.println("\nWiFi failed. Going back to sleep.");
-    goToSleep();
-  }
+  Serial.println("WiFi FAILED");
+  return false;
 }
 
 String fetchActiveBatchId() {
-  HTTPClient http;
-  String url =
-      String(supabase_url) +
-      "/rest/v1/"
-      "batches?status=eq.fermenting&order=created_at.desc&limit=1&select=id";
+  for (int i = 0; i < 3; i++) {  // 🔁 retry HTTP
+    WiFiClientSecure client;
+    client.setInsecure();
 
-  http.begin(url);
-  http.addHeader("apikey", supabase_anon_key);
-  http.addHeader("Authorization", String("Bearer ") + supabase_anon_key);
+    HTTPClient http;
 
-  int httpCode = http.GET();
-  if (httpCode == 200) {
-    String response = http.getString();
-    int idStart = response.indexOf("\"id\":\"");
-    if (idStart >= 0) {
-      idStart += 6;
-      int idEnd = response.indexOf("\"", idStart);
-      if (idEnd > idStart) {
-        String id = response.substring(idStart, idEnd);
-        http.end();
-        return id;
+    String url = String(supabase_url) +
+      "/rest/v1/batches?status=eq.fermenting&order=created_at.desc&limit=1&select=id";
+
+    http.begin(client, url);
+    http.setTimeout(5000);
+
+    http.addHeader("apikey", supabase_anon_key);
+    http.addHeader("Authorization", String("Bearer ") + supabase_anon_key);
+
+    Serial.println("Fetching batch...");
+
+    int httpCode = http.GET();
+
+    if (httpCode == 200) {
+      String response = http.getString();
+      http.end();
+
+      int start = response.indexOf("\"id\":\"");
+      if (start >= 0) {
+        start += 6;
+        int end = response.indexOf("\"", start);
+        return response.substring(start, end);
       }
     }
-  } else {
-    Serial.print("Batch lookup failed, HTTP: ");
-    Serial.println(httpCode);
+
+    Serial.println("HTTP retry...");
+    http.end();
+    delay(2000);
   }
-  http.end();
+
   return "";
 }
 
@@ -190,22 +213,18 @@ bool connectMQTT() {
   espClient.setInsecure();
   client.setServer(mqtt_server, mqtt_port);
 
-  String clientId = "InvisiPod-";
-  clientId += String(random(0xffff), HEX);
+  for (int i = 0; i < 3; i++) {
+    Serial.print("MQTT connecting...");
 
-  int attempts = 0;
-  while (!client.connected() && attempts < 3) {
-    Serial.print("MQTT: connecting...");
-    if (client.connect(clientId.c_str(), mqtt_username, mqtt_password)) {
-      Serial.println(" OK!");
+    if (client.connect("InvisiPod", mqtt_username, mqtt_password)) {
+      Serial.println("OK");
       return true;
     }
-    Serial.print(" Failed (rc=");
-    Serial.print(client.state());
-    Serial.println("). Retry...");
+
+    Serial.println("Failed");
     delay(2000);
-    attempts++;
   }
+
   return false;
 }
 
@@ -234,62 +253,51 @@ void goToSleep() {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("\n--- Invisi Pod: Wake Cycle ---");
 
-  // Step 1: Read all sensors BEFORE WiFi (avoids ADC2 conflict + heat)
+  Serial.println("\n--- Wake Cycle ---");
+
   readAllSensors();
 
-  // Step 2: Connect WiFi
-  connectWiFi();
+  if (!connectWiFi()) {
+    Serial.println("No WiFi → sleep");
+    goToSleep();
+    return;
+  }
 
-  // Step 3: Fetch active batch
   String batchId = fetchActiveBatchId();
-  if (batchId.length() == 0) {
-    Serial.println("No active batch. Sleeping.");
+
+  if (batchId == "") {
+    Serial.println("No batch → sleep");
     goToSleep();
     return;
   }
-  Serial.print("Batch: ");
-  Serial.println(batchId);
 
-  // Step 4: Connect MQTT
   if (!connectMQTT()) {
-    Serial.println("MQTT failed. Sleeping.");
+    Serial.println("No MQTT → sleep");
     goToSleep();
     return;
   }
 
-  // Step 5: Build and publish JSON payload
-  char topic[128];
-  snprintf(topic, sizeof(topic), "invisi/pod/%s/telemetry", batchId.c_str());
-
+  // Build payload
   String payload = "{";
   payload += "\"batch_id\":\"" + batchId + "\"";
-  if (centerOk)
-    payload += ",\"temp_center\":" + String(tempCenter, 2);
-  if (leftOk)
-    payload += ",\"temp_left\":" + String(tempLeft, 2);
-  if (rightOk)
-    payload += ",\"temp_right\":" + String(tempRight, 2);
+  if (centerOk) payload += ",\"temp_center\":" + String(tempCenter, 2);
+  if (leftOk) payload += ",\"temp_left\":" + String(tempLeft, 2);
+  if (rightOk) payload += ",\"temp_right\":" + String(tempRight, 2);
   payload += ",\"gas_left\":" + String(gasLeft);
   payload += ",\"gas_right\":" + String(gasRight);
   payload += "}";
 
-  Serial.print("-> ");
   Serial.println(payload);
 
-  if (client.publish(topic, payload.c_str())) {
-    Serial.println("Published OK");
+  if (client.publish("invisi/pod/data", payload.c_str())) {
+    Serial.println("Published");
   } else {
-    Serial.println("Publish FAILED");
+    Serial.println("Publish failed");
   }
 
-  // Give MQTT a moment to flush the packet
-  client.loop();
-  delay(500);
   client.disconnect();
 
-  // Step 6: Sleep
   goToSleep();
 }
 
