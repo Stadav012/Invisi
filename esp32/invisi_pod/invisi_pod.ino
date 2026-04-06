@@ -8,11 +8,11 @@
 // 1. CONFIGURATION
 // =========================================================================
 
-const char* ssid = "MTN_4G_487D38";
-const char* password = "Ilovetobecalledtrymore123!";
+const char *ssid = "MTN_4G_487D38";
+const char *password = "Ilovetobecalledtrymore123!";
 
 // Local Mosquitto broker on Raspberry Pi
-const char *mqtt_server = "192.168.1.100"; // TODO: Set to your Pi's LAN IP
+const char *mqtt_server = "192.168.1.100";
 const int mqtt_port = 1883;
 
 // Supabase — used only for batch ID lookup
@@ -100,12 +100,19 @@ void readAllSensors() {
   if (coreOk) {
     float edgeSum = 0;
     int edgeCount = 0;
-    if (leftOk) { edgeSum += tLeft; edgeCount++; }
-    if (rightOk) { edgeSum += tRight; edgeCount++; }
+    if (leftOk) {
+      edgeSum += tLeft;
+      edgeCount++;
+    }
+    if (rightOk) {
+      edgeSum += tRight;
+      edgeCount++;
+    }
     if (edgeCount > 0) {
       float gradient = tCore - (edgeSum / edgeCount);
       Serial.printf("Thermal Gradient: %.1f C\n", gradient);
-      if (gradient > 5.0) Serial.println(">> TURNING RECOMMENDED <<");
+      if (gradient > 5.0)
+        Serial.println(">> TURNING RECOMMENDED <<");
     }
   }
 }
@@ -122,13 +129,15 @@ bool connectWiFi() {
   for (int retries = 0; retries < 3; retries++) {
     WiFi.begin(ssid, password);
 
-    for (int attempts = 0; WiFi.status() != WL_CONNECTED && attempts < 40; attempts++) {
+    for (int attempts = 0; WiFi.status() != WL_CONNECTED && attempts < 40;
+         attempts++) {
       delay(500);
       Serial.print(".");
     }
 
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.printf("\nWiFi Connected: %s\n", WiFi.localIP().toString().c_str());
+      Serial.printf("\nWiFi Connected: %s\n",
+                    WiFi.localIP().toString().c_str());
       return true;
     }
 
@@ -146,8 +155,10 @@ String fetchActiveBatchId() {
     secClient.setInsecure();
 
     HTTPClient http;
-    String url = String(supabase_url) +
-      "/rest/v1/batches?status=eq.fermenting&order=created_at.desc&limit=1&select=id";
+    String url =
+        String(supabase_url) +
+        "/rest/v1/"
+        "batches?status=eq.fermenting&order=created_at.desc&limit=1&select=id";
 
     http.begin(secClient, url);
     http.setTimeout(5000);
@@ -201,7 +212,8 @@ bool connectMQTT() {
 // =========================================================================
 
 void goToSleep() {
-  Serial.printf("Sleeping for %llu seconds...\n", SLEEP_DURATION_US / 1000000ULL);
+  Serial.printf("Sleeping for %llu seconds...\n",
+                SLEEP_DURATION_US / 1000000ULL);
   Serial.flush();
 
   WiFi.disconnect(true);
@@ -243,15 +255,19 @@ void setup() {
   }
 
   // Build payload with Unix epoch timestamp
-  unsigned long ts = (unsigned long)(millis() / 1000) + 1700000000UL; // Approximate epoch
+  unsigned long ts =
+      (unsigned long)(millis() / 1000) + 1700000000UL; // Approximate epoch
   // For accurate time, use NTP — but this is good enough for ordering
 
   String payload = "{";
   payload += "\"ts\":" + String(ts);
   payload += ",\"batch_id\":\"" + batchId + "\"";
-  if (coreOk) payload += ",\"t_core\":" + String(tCore, 2);
-  if (leftOk) payload += ",\"t_left\":" + String(tLeft, 2);
-  if (rightOk) payload += ",\"t_right\":" + String(tRight, 2);
+  if (coreOk)
+    payload += ",\"t_core\":" + String(tCore, 2);
+  if (leftOk)
+    payload += ",\"t_left\":" + String(tLeft, 2);
+  if (rightOk)
+    payload += ",\"t_right\":" + String(tRight, 2);
   payload += ",\"gas_left\":" + String(gasLeft);
   payload += ",\"gas_right\":" + String(gasRight);
   payload += "}";
