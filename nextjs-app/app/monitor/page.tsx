@@ -57,6 +57,7 @@ function formatUptime(seconds: number): string {
 export default function MonitorPage() {
     const [health, setHealth] = useState<HealthData | null>(null);
     const [readings, setReadings] = useState<SensorReading[]>([]);
+    const [latestReading, setLatestReading] = useState<SensorReading | null>(null);
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(0);
     const [loading, setLoading] = useState(true);
@@ -94,7 +95,24 @@ export default function MonitorPage() {
         return () => clearInterval(interval);
     }, []);
 
-    // Fetch paginated readings
+    // Always fetch the latest reading for the sensor strip (independent of page)
+    useEffect(() => {
+        if (!activeBatchId) return;
+        const fetchLatest = async () => {
+            try {
+                const res = await fetch(`/api/readings?batch_id=${activeBatchId}&limit=1&offset=0`);
+                if (!res.ok) return;
+                const json = await res.json();
+                const data = json.data ?? [];
+                if (data.length > 0) setLatestReading(data[0]);
+            } catch {}
+        };
+        fetchLatest();
+        const interval = setInterval(fetchLatest, 10_000);
+        return () => clearInterval(interval);
+    }, [activeBatchId]);
+
+    // Fetch paginated readings for the table
     const fetchReadings = useCallback(async () => {
         if (!activeBatchId) return;
         try {
@@ -113,15 +131,7 @@ export default function MonitorPage() {
         fetchReadings();
     }, [fetchReadings]);
 
-    // Auto-refresh page 0
-    useEffect(() => {
-        if (page !== 0) return;
-        const interval = setInterval(fetchReadings, 10_000);
-        return () => clearInterval(interval);
-    }, [page, fetchReadings]);
-
     const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-    const latestReading = page === 0 && readings.length > 0 ? readings[0] : null;
     const fsmState = health?.fsm_state || latestReading?.fermentation_state || "IDLE";
     const stateConfig = STATE_CONFIG[fsmState] || STATE_CONFIG.IDLE;
 

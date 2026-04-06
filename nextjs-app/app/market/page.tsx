@@ -94,8 +94,14 @@ export default function MarketPage() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ status: newStatus }),
             });
-            if (res.ok) await fetchBatches();
-        } catch {} finally {
+            if (!res.ok) {
+                const err = await res.json();
+                console.error("Transition failed:", err);
+            }
+            await fetchBatches();
+        } catch (e) {
+            console.error("Transition error:", e);
+        } finally {
             setTransitioning(null);
         }
     };
@@ -306,7 +312,7 @@ export default function MarketPage() {
                                         <button
                                             onClick={() => transitionBatch(batch.id, nextStatus)}
                                             disabled={transitioning === batch.id}
-                                            className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl border-2 ${nextCfg.border} ${nextCfg.color} font-bold text-sm hover:${nextCfg.bg} transition-colors disabled:opacity-50`}
+                                            className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border-2 border-gray-200 text-gray-700 font-bold text-sm hover:bg-gray-50 transition-colors disabled:opacity-50"
                                         >
                                             {transitioning === batch.id ? (
                                                 <Loader2 size={16} className="animate-spin" />

@@ -2,12 +2,12 @@
 
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { LayoutGrid, Sprout, Store, User, Zap } from "lucide-react";
+import { LayoutGrid, Sprout, Layers, User, Zap } from "lucide-react";
 
 const navItems = [
     { label: "Home", icon: LayoutGrid, href: "/" },
     { label: "Monitor", icon: Sprout, href: "/monitor" },
-    { label: "Market", icon: Store, href: "/market" },
+    { label: "Batches", icon: Layers, href: "/market" },
     { label: "Profile", icon: User, href: "/profile" },
 ];
 
