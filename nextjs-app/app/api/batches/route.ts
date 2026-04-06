@@ -1,7 +1,9 @@
-import { supabase } from "@/lib/supabase/client";
+import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function GET() {
+    const supabase = await createClient();
+
     const { data, error } = await supabase
         .from("batches")
         .select("*")
@@ -15,9 +17,9 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+    const supabase = await createClient();
     const body = await request.json();
 
-    // Determine next batch number
     const { count } = await supabase
         .from("batches")
         .select("*", { count: "exact", head: true });

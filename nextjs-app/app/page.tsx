@@ -49,12 +49,13 @@ function batchToMetrics(batch: Batch, liveReading?: SensorReading | null) {
     case "fermenting": {
       const temp = liveReading?.t_core ?? null;
       const tempLabel = temp !== null ? `${temp}°C Core` : "Awaiting data...";
+      const overdue = days > totalDays;
       return {
         label: "Progress",
-        value: `Day ${days} of ${totalDays}`,
+        value: overdue ? `Complete (Day ${days})` : `Day ${days} of ${totalDays}`,
         progress: Math.min(100, (days / totalDays) * 100),
         subIcon: Thermometer,
-        subLabel: tempLabel,
+        subLabel: overdue ? "Ready to move to drying" : tempLabel,
       };
     }
     case "drying":
