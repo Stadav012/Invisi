@@ -25,16 +25,12 @@ interface Batch {
 }
 
 interface SensorReading {
-  temp_center: number | null;
-  temp_left: number | null;
-  temp_right: number | null;
+  t_core: number | null;
+  t_left: number | null;
+  t_right: number | null;
   gas_left: number | null;
   gas_right: number | null;
-  // Legacy fields
-  temperature: number | null;
-  humidity: number | null;
-  ph: number | null;
-  co2: number | null;
+  fermentation_state: string | null;
   recorded_at: string;
 }
 
@@ -50,7 +46,7 @@ function batchToMetrics(batch: Batch, liveReading?: SensorReading | null) {
 
   switch (batch.status) {
     case "fermenting": {
-      const temp = liveReading?.temp_center ?? liveReading?.temperature ?? null;
+      const temp = liveReading?.t_core ?? null;
       const tempLabel = temp !== null ? `${temp}°C Core` : "Awaiting data...";
       return {
         label: "Progress",
@@ -163,13 +159,13 @@ export default function Home() {
   // Compute current thermal gradient for the turn alert
   const currentGradient = useMemo(() => {
     const d = liveReading;
-    if (!d?.temp_center) return null;
+    if (!d?.t_core) return null;
     const edges: number[] = [];
-    if (d.temp_left != null) edges.push(d.temp_left);
-    if (d.temp_right != null) edges.push(d.temp_right);
+    if (d.t_left != null) edges.push(d.t_left);
+    if (d.t_right != null) edges.push(d.t_right);
     if (edges.length === 0) return null;
     const edgeAvg = edges.reduce((a, b) => a + b, 0) / edges.length;
-    return parseFloat((d.temp_center - edgeAvg).toFixed(1));
+    return parseFloat((d.t_core - edgeAvg).toFixed(1));
   }, [liveReading]);
 
   const showTurnAlert = currentGradient != null && currentGradient > 5 && !alertDismissed;
@@ -241,9 +237,9 @@ export default function Home() {
                 status: activeBatch.status,
                 metrics: batchToMetrics(activeBatch, liveReading),
                 liveData: liveReading ? {
-                  temp_center: liveReading.temp_center,
-                  temp_left: liveReading.temp_left,
-                  temp_right: liveReading.temp_right,
+                  t_core: liveReading.t_core,
+                  t_left: liveReading.t_left,
+                  t_right: liveReading.t_right,
                   gas_left: liveReading.gas_left,
                   gas_right: liveReading.gas_right,
                 } : null,

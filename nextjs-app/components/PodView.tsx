@@ -35,9 +35,9 @@ interface PodViewProps {
             progress: number;
         };
         liveData?: {
-            temp_center: number | null;
-            temp_left: number | null;
-            temp_right: number | null;
+            t_core: number | null;
+            t_left: number | null;
+            t_right: number | null;
             gas_left: number | null;
             gas_right: number | null;
         } | null;
@@ -497,7 +497,7 @@ export function PodView({ batch }: PodViewProps) {
                     <StatItem
                         icon={Thermometer}
                         label="Core Temp"
-                        value={batch.liveData?.temp_center != null ? `${batch.liveData.temp_center}°C` : "---"}
+                        value={batch.liveData?.t_core != null ? `${batch.liveData.t_core}°C` : "---"}
                         color="orange"
                     />
                 </div>
@@ -505,24 +505,24 @@ export function PodView({ batch }: PodViewProps) {
                     <StatItem
                         icon={Thermometer}
                         label="Left"
-                        value={batch.liveData?.temp_left != null ? `${batch.liveData.temp_left}°C` : "---"}
+                        value={batch.liveData?.t_left != null ? `${batch.liveData.t_left}°C` : "---"}
                         color="blue"
                     />
                     <StatItem
                         icon={Thermometer}
                         label="Right"
-                        value={batch.liveData?.temp_right != null ? `${batch.liveData.temp_right}°C` : "---"}
+                        value={batch.liveData?.t_right != null ? `${batch.liveData.t_right}°C` : "---"}
                         color="blue"
                     />
                 </div>
                 {(() => {
                     const d = batch.liveData;
-                    if (d?.temp_center != null && (d?.temp_left != null || d?.temp_right != null)) {
+                    if (d?.t_core != null && (d?.t_left != null || d?.t_right != null)) {
                         const edges: number[] = [];
-                        if (d.temp_left != null) edges.push(d.temp_left);
-                        if (d.temp_right != null) edges.push(d.temp_right);
+                        if (d.t_left != null) edges.push(d.t_left);
+                        if (d.t_right != null) edges.push(d.t_right);
                         const edgeAvg = edges.reduce((a, b) => a + b, 0) / edges.length;
-                        const gradient = parseFloat((d.temp_center - edgeAvg).toFixed(1));
+                        const gradient = parseFloat((d.t_core - edgeAvg).toFixed(1));
                         const needsTurning = gradient > 5;
                         return (
                             <div className="pointer-events-auto">

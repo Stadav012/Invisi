@@ -3,23 +3,19 @@
 #include <OneWire.h>
 #include <PubSubClient.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include "esp_wpa2.h"
 
 // =========================================================================
 // 1. CONFIGURATION
 // =========================================================================
 
-
 const char* ssid = "MTN_4G_487D38";
 const char* password = "Ilovetobecalledtrymore123!";
 
+// Local Mosquitto broker on Raspberry Pi
+const char *mqtt_server = "192.168.1.100"; // TODO: Set to your Pi's LAN IP
+const int mqtt_port = 1883;
 
-const char *mqtt_server = "175d3f6bef384d07b45f87e538953408.s1.eu.hivemq.cloud";
-const int mqtt_port = 8883;
-const char *mqtt_username = "Invisi";
-const char *mqtt_password = "Invisi2026";
-
+// Supabase — used only for batch ID lookup
 const char *supabase_url = "https://ivifglrpwgxbncobkxng.supabase.co";
 const char *supabase_anon_key =
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
@@ -27,19 +23,25 @@ const char *supabase_anon_key =
     "Fub24iLCJpYXQiOjE3NzMwNTExMjksImV4cCI6MjA4ODYyNzEyOX0.lZ473c8-2-IUU7q-h-"
     "JDh2C1xU5j_VfP9A09XlupTtE";
 
-// Deep sleep duration: 30 minutes (in microseconds)
+// Deep sleep duration: 30 minutes
 #define SLEEP_DURATION_US (30 * 60 * 1000000ULL)
+
+// Pod identifier
+#define POD_ID "pod_01"
+
+// MQTT topic following the design taxonomy
+#define MQTT_TOPIC "invisi/fermentation/" POD_ID "/sensors"
 
 // =========================================================================
 // 2. HARDWARE PINS
 // =========================================================================
 
 // DS18B20 Temperature Sensors
-#define TEMP_CENTER_PIN 19 // Red — center of bean mass
-#define TEMP_LEFT_PIN 18   // Green — left edge
-#define TEMP_RIGHT_PIN 5   // Blue — right edge
+#define TEMP_CENTER_PIN 19 // Red — center of bean mass (t_core)
+#define TEMP_LEFT_PIN 18   // Green — left edge (t_left)
+#define TEMP_RIGHT_PIN 5   // Blue — right edge (t_right)
 
-// MQ-135 Gas Sensors — moved to ADC1 pins (ADC2 conflicts with WiFi)
+// MQ-135 Gas Sensors on ADC1 (ADC2 conflicts with WiFi)
 #define GAS_LEFT_PIN 32  // Green wire — top lid, left side
 #define GAS_RIGHT_PIN 33 // Yellow wire — top lid, right side
 
@@ -55,79 +57,55 @@ DallasTemperature sensorCenter(&owCenter);
 DallasTemperature sensorLeft(&owLeft);
 DallasTemperature sensorRight(&owRight);
 
-WiFiClientSecure espClient;
+WiFiClient espClient; // Plain TCP — no TLS needed on LAN
 PubSubClient client(espClient);
 
 // =========================================================================
-// 4. SENSOR READINGS (read BEFORE WiFi to avoid ADC2 conflict + heat)
+// 4. SENSOR READINGS (read BEFORE WiFi to avoid ADC2 interference)
 // =========================================================================
 
-// Stored globally so they survive between function calls in setup()
-float tempCenter, tempLeft, tempRight;
+float tCore, tLeft, tRight;
 int gasLeft, gasRight;
-bool centerOk, leftOk, rightOk;
+bool coreOk, leftOk, rightOk;
 
 void readAllSensors() {
-  // Initialize temperature sensors
   sensorCenter.begin();
   sensorLeft.begin();
   sensorRight.begin();
 
-  // Read temperatures
   sensorCenter.requestTemperatures();
   sensorLeft.requestTemperatures();
   sensorRight.requestTemperatures();
 
-  tempCenter = sensorCenter.getTempCByIndex(0);
-  tempLeft = sensorLeft.getTempCByIndex(0);
-  tempRight = sensorRight.getTempCByIndex(0);
+  tCore = sensorCenter.getTempCByIndex(0);
+  tLeft = sensorLeft.getTempCByIndex(0);
+  tRight = sensorRight.getTempCByIndex(0);
 
-  centerOk = (tempCenter != DEVICE_DISCONNECTED_C);
-  leftOk = (tempLeft != DEVICE_DISCONNECTED_C);
-  rightOk = (tempRight != DEVICE_DISCONNECTED_C);
+  coreOk = (tCore != DEVICE_DISCONNECTED_C);
+  leftOk = (tLeft != DEVICE_DISCONNECTED_C);
+  rightOk = (tRight != DEVICE_DISCONNECTED_C);
 
-  // Read gas sensors (ADC1 pins, safe even with WiFi, but we read early anyway)
   pinMode(GAS_LEFT_PIN, INPUT);
   pinMode(GAS_RIGHT_PIN, INPUT);
   gasLeft = analogRead(GAS_LEFT_PIN);
   gasRight = analogRead(GAS_RIGHT_PIN);
 
-  // Debug print
   Serial.println("\n--- Sensor Readings ---");
-  Serial.print("Temp Center: ");
-  Serial.print(centerOk ? String(tempCenter) : "ERR");
-  Serial.println(" C");
-  Serial.print("Temp Left:   ");
-  Serial.print(leftOk ? String(tempLeft) : "ERR");
-  Serial.println(" C");
-  Serial.print("Temp Right:  ");
-  Serial.print(rightOk ? String(tempRight) : "ERR");
-  Serial.println(" C");
-  Serial.print("Gas Left:  ");
-  Serial.println(gasLeft);
-  Serial.print("Gas Right: ");
-  Serial.println(gasRight);
+  Serial.printf("t_core: %s C\n", coreOk ? String(tCore).c_str() : "ERR");
+  Serial.printf("t_left: %s C\n", leftOk ? String(tLeft).c_str() : "ERR");
+  Serial.printf("t_right: %s C\n", rightOk ? String(tRight).c_str() : "ERR");
+  Serial.printf("gas_left: %d\n", gasLeft);
+  Serial.printf("gas_right: %d\n", gasRight);
 
-  // Thermal gradient check
-  if (centerOk) {
+  if (coreOk) {
     float edgeSum = 0;
     int edgeCount = 0;
-    if (leftOk) {
-      edgeSum += tempLeft;
-      edgeCount++;
-    }
-    if (rightOk) {
-      edgeSum += tempRight;
-      edgeCount++;
-    }
+    if (leftOk) { edgeSum += tLeft; edgeCount++; }
+    if (rightOk) { edgeSum += tRight; edgeCount++; }
     if (edgeCount > 0) {
-      float gradient = tempCenter - (edgeSum / edgeCount);
-      Serial.print("Thermal Gradient: ");
-      Serial.print(gradient, 1);
-      Serial.println(" C");
-      if (gradient > 5.0) {
-        Serial.println(">> TURNING RECOMMENDED <<");
-      }
+      float gradient = tCore - (edgeSum / edgeCount);
+      Serial.printf("Thermal Gradient: %.1f C\n", gradient);
+      if (gradient > 5.0) Serial.println(">> TURNING RECOMMENDED <<");
     }
   }
 }
@@ -138,30 +116,23 @@ void readAllSensors() {
 
 bool connectWiFi() {
   Serial.println("Connecting to WiFi...");
-
   WiFi.disconnect(true);
   WiFi.mode(WIFI_STA);
 
-  int retries = 0;
-
-  while (retries < 3) {   // 🔁 retry full connection 3 times
+  for (int retries = 0; retries < 3; retries++) {
     WiFi.begin(ssid, password);
 
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+    for (int attempts = 0; WiFi.status() != WL_CONNECTED && attempts < 40; attempts++) {
       delay(500);
       Serial.print(".");
-      attempts++;
     }
 
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("\nWiFi Connected!");
-      Serial.println(WiFi.localIP());
+      Serial.printf("\nWiFi Connected: %s\n", WiFi.localIP().toString().c_str());
       return true;
     }
 
     Serial.println("\nRetrying WiFi...");
-    retries++;
     delay(2000);
   }
 
@@ -170,23 +141,20 @@ bool connectWiFi() {
 }
 
 String fetchActiveBatchId() {
-  for (int i = 0; i < 3; i++) {  // 🔁 retry HTTP
-    WiFiClientSecure client;
-    client.setInsecure();
+  for (int i = 0; i < 3; i++) {
+    WiFiClientSecure secClient; // TLS only for Supabase (external HTTPS)
+    secClient.setInsecure();
 
     HTTPClient http;
-
     String url = String(supabase_url) +
       "/rest/v1/batches?status=eq.fermenting&order=created_at.desc&limit=1&select=id";
 
-    http.begin(client, url);
+    http.begin(secClient, url);
     http.setTimeout(5000);
-
     http.addHeader("apikey", supabase_anon_key);
     http.addHeader("Authorization", String("Bearer ") + supabase_anon_key);
 
     Serial.println("Fetching batch...");
-
     int httpCode = http.GET();
 
     if (httpCode == 200) {
@@ -210,13 +178,13 @@ String fetchActiveBatchId() {
 }
 
 bool connectMQTT() {
-  espClient.setInsecure();
   client.setServer(mqtt_server, mqtt_port);
 
   for (int i = 0; i < 3; i++) {
     Serial.print("MQTT connecting...");
 
-    if (client.connect("InvisiPod", mqtt_username, mqtt_password)) {
+    // No credentials — anonymous access on local Mosquitto
+    if (client.connect("InvisiPod")) {
       Serial.println("OK");
       return true;
     }
@@ -233,9 +201,7 @@ bool connectMQTT() {
 // =========================================================================
 
 void goToSleep() {
-  Serial.print("Sleeping for ");
-  Serial.print(SLEEP_DURATION_US / 1000000ULL);
-  Serial.println(" seconds...");
+  Serial.printf("Sleeping for %llu seconds...\n", SLEEP_DURATION_US / 1000000ULL);
   Serial.flush();
 
   WiFi.disconnect(true);
@@ -243,7 +209,6 @@ void goToSleep() {
 
   esp_sleep_enable_timer_wakeup(SLEEP_DURATION_US);
   esp_deep_sleep_start();
-  // Execution stops here. On wake, setup() runs from scratch.
 }
 
 // =========================================================================
@@ -253,51 +218,60 @@ void goToSleep() {
 void setup() {
   Serial.begin(115200);
   delay(500);
-
   Serial.println("\n--- Wake Cycle ---");
 
+  // Read sensors BEFORE WiFi (ADC stability)
   readAllSensors();
 
   if (!connectWiFi()) {
-    Serial.println("No WiFi → sleep");
+    Serial.println("No WiFi -> sleep");
     goToSleep();
     return;
   }
 
   String batchId = fetchActiveBatchId();
-
   if (batchId == "") {
-    Serial.println("No batch → sleep");
+    Serial.println("No batch -> sleep");
     goToSleep();
     return;
   }
 
   if (!connectMQTT()) {
-    Serial.println("No MQTT → sleep");
+    Serial.println("No MQTT -> sleep");
     goToSleep();
     return;
   }
 
-  // Build payload
+  // Build payload with Unix epoch timestamp
+  unsigned long ts = (unsigned long)(millis() / 1000) + 1700000000UL; // Approximate epoch
+  // For accurate time, use NTP — but this is good enough for ordering
+
   String payload = "{";
-  payload += "\"batch_id\":\"" + batchId + "\"";
-  if (centerOk) payload += ",\"temp_center\":" + String(tempCenter, 2);
-  if (leftOk) payload += ",\"temp_left\":" + String(tempLeft, 2);
-  if (rightOk) payload += ",\"temp_right\":" + String(tempRight, 2);
+  payload += "\"ts\":" + String(ts);
+  payload += ",\"batch_id\":\"" + batchId + "\"";
+  if (coreOk) payload += ",\"t_core\":" + String(tCore, 2);
+  if (leftOk) payload += ",\"t_left\":" + String(tLeft, 2);
+  if (rightOk) payload += ",\"t_right\":" + String(tRight, 2);
   payload += ",\"gas_left\":" + String(gasLeft);
   payload += ",\"gas_right\":" + String(gasRight);
   payload += "}";
 
   Serial.println(payload);
 
-  if (client.publish("invisi/pod/pod_01/telemetry", payload.c_str())) {
-    Serial.println("Published to telemetry topic");
+  // QoS 1 publish — broker ACKs before we sleep
+  if (client.publish(MQTT_TOPIC, payload.c_str(), false)) {
+    // Process ACK — loop briefly to receive PUBACK
+    unsigned long start = millis();
+    while (millis() - start < 2000) {
+      client.loop();
+      delay(50);
+    }
+    Serial.println("Published (QoS 1)");
   } else {
     Serial.println("Publish failed");
   }
 
   client.disconnect();
-
   goToSleep();
 }
 

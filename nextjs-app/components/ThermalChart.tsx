@@ -16,9 +16,9 @@ import { Thermometer, Wind, TrendingUp } from "lucide-react";
 
 interface HourlyReading {
     hour: string;
-    avg_temp_center: number | null;
-    avg_temp_left: number | null;
-    avg_temp_right: number | null;
+    avg_t_core: number | null;
+    avg_t_left: number | null;
+    avg_t_right: number | null;
     avg_gas_left: number | null;
     avg_gas_right: number | null;
     max_gradient: number | null;
@@ -81,21 +81,21 @@ export function ThermalChart({ data }: ThermalChartProps) {
     // Compute current gradient for the header badge
     const latest = data[data.length - 1];
     let currentGradient: number | null = null;
-    if (latest.avg_temp_center != null) {
+    if (latest.avg_t_core != null) {
         const edges: number[] = [];
-        if (latest.avg_temp_left != null) edges.push(latest.avg_temp_left);
-        if (latest.avg_temp_right != null) edges.push(latest.avg_temp_right);
+        if (latest.avg_t_left != null) edges.push(latest.avg_t_left);
+        if (latest.avg_t_right != null) edges.push(latest.avg_t_right);
         if (edges.length > 0) {
             const edgeAvg = edges.reduce((a, b) => a + b, 0) / edges.length;
-            currentGradient = parseFloat((latest.avg_temp_center - edgeAvg).toFixed(1));
+            currentGradient = parseFloat((latest.avg_t_core - edgeAvg).toFixed(1));
         }
     }
 
     const chartData = data.map(d => ({
         hour: d.hour,
-        "Center": d.avg_temp_center,
-        "Left Edge": d.avg_temp_left,
-        "Right Edge": d.avg_temp_right,
+        "Center": d.avg_t_core,
+        "Left Edge": d.avg_t_left,
+        "Right Edge": d.avg_t_right,
         "Gas Left": d.avg_gas_left,
         "Gas Right": d.avg_gas_right,
         gradient: d.max_gradient != null ? parseFloat(Number(d.max_gradient).toFixed(1)) : null,

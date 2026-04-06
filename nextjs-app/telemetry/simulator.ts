@@ -1,5 +1,5 @@
 /**
- * Sensor simulator — publishes fake position-aware telemetry to MQTT for dev testing.
+ * Sensor simulator — publishes fake telemetry to local Mosquitto for dev testing.
  *
  * Usage: bun run simulate
  *
@@ -14,34 +14,30 @@ const logger = logging("simulator");
 
 const PUBLISH_INTERVAL_MS = 30000;
 
-const supabase = createClient(
-    process.env.SUPABASE_URL!,
-    process.env.SUPABASE_KEY!
-);
+const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_KEY!);
 
 function clamp(val: number, min: number, max: number) {
     return Math.max(min, Math.min(max, val));
 }
 
 // Simulated sensor state — center runs hotter than edges
-let tempCenter = 47;
-let tempLeft = 43;
-let tempRight = 42;
+let tCore = 47;
+let tLeft = 43;
+let tRight = 42;
 let gasLeft = 2200;
 let gasRight = 2000;
 
 function nextReading() {
-    // Center drifts higher (exothermic core), edges drift lower
-    tempCenter = clamp(tempCenter + (Math.random() - 0.45) * 1.5, 40, 55);
-    tempLeft = clamp(tempLeft + (Math.random() - 0.5) * 1.2, 35, 50);
-    tempRight = clamp(tempRight + (Math.random() - 0.5) * 1.2, 35, 50);
+    tCore = clamp(tCore + (Math.random() - 0.45) * 1.5, 40, 55);
+    tLeft = clamp(tLeft + (Math.random() - 0.5) * 1.2, 35, 50);
+    tRight = clamp(tRight + (Math.random() - 0.5) * 1.2, 35, 50);
     gasLeft = clamp(gasLeft + (Math.random() - 0.5) * 150, 800, 4000);
     gasRight = clamp(gasRight + (Math.random() - 0.5) * 150, 800, 4000);
 
     return {
-        temp_center: parseFloat(tempCenter.toFixed(1)),
-        temp_left: parseFloat(tempLeft.toFixed(1)),
-        temp_right: parseFloat(tempRight.toFixed(1)),
+        t_core: parseFloat(tCore.toFixed(1)),
+        t_left: parseFloat(tLeft.toFixed(1)),
+        t_right: parseFloat(tRight.toFixed(1)),
         gas_left: Math.round(gasLeft),
         gas_right: Math.round(gasRight),
     };
@@ -60,26 +56,22 @@ async function main() {
         process.exit(1);
     }
 
-    logger.info(`Simulating sensors for ${batch.batch_number} (${batch.id})`);
+    const podId = process.env.POD_ID || "pod_01";
+    logger.info(`Simulating sensors for ${batch.batch_number} (${batch.id}) as ${podId}`);
 
-    const client = mqtt.connect(process.env.MQTT_BROKER_URL!, {
-        username: process.env.MQTT_USERNAME!,
-        password: process.env.MQTT_PASSWORD!,
-        protocol: "mqtts",
-        rejectUnauthorized: true,
-    });
+    const client = mqtt.connect(process.env.MQTT_BROKER_URL || "mqtt://localhost:1883");
 
     client.on("connect", () => {
-        logger.info("Connected to MQTT broker");
+        logger.info("Connected to local MQTT broker");
 
-        const topic = `invisi/pod/${batch.id}/telemetry`;
+        const topic = `invisi/fermentation/${podId}/sensors`;
 
         setInterval(() => {
             const reading = nextReading();
             const payload = JSON.stringify({
+                ts: Math.floor(Date.now() / 1000),
                 batch_id: batch.id,
                 ...reading,
-                recorded_at: new Date().toISOString(),
             });
 
             client.publish(topic, payload, { qos: 1 }, (err) => {
@@ -88,8 +80,8 @@ async function main() {
                     return;
                 }
                 logger.info(
-                    `Published: tc=${reading.temp_center} tl=${reading.temp_left} ` +
-                    `tr=${reading.temp_right} gl=${reading.gas_left} gr=${reading.gas_right}`
+                    `Published: tc=${reading.t_core} tl=${reading.t_left} ` +
+                    `tr=${reading.t_right} gl=${reading.gas_left} gr=${reading.gas_right}`
                 );
             });
         }, PUBLISH_INTERVAL_MS);

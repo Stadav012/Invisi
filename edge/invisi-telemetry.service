@@ -1,0 +1,16 @@
+[Unit]
+Description=Invisi Telemetry Pipeline
+After=network.target mosquitto.service redis-server.service
+Wants=mosquitto.service redis-server.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/Invisi/nextjs-app
+EnvironmentFile=/home/pi/Invisi/nextjs-app/.env.local
+ExecStart=/home/pi/.bun/bin/bun run telemetry/index.ts
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

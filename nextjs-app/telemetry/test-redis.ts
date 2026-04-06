@@ -1,15 +1,22 @@
-import { Redis } from "@upstash/redis";
+import Redis from "ioredis";
 
-const redis = new Redis({
-    url: process.env.UPSTASH_REDIS_URL!,
-    token: process.env.UPSTASH_REDIS_TOKEN!,
-});
+const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
 
 async function run() {
-    console.log("Reading from stream (Pending)...");
-    // "0" fetches pending messages we haven't xacked yet
-    const res = await redis.xreadgroup("supabase-writers", "writer-1", process.env.REDIS_STREAM_KEY || "sensor-readings", "0", { count: 1 });
-    console.log("Response:", JSON.stringify(res, null, 2));
+    const key = `${process.env.POD_ID || "pod_01"}_telemetry`;
+
+    console.log(`Reading from ZSET ${key}...`);
+    const members = await redis.zrangebyscore(key, "-inf", "+inf", "WITHSCORES");
+
+    if (members.length === 0) {
+        console.log("No entries in ZSET");
+    } else {
+        for (let i = 0; i < members.length; i += 2) {
+            console.log(`Score: ${members[i + 1]} | Data: ${members[i]}`);
+        }
+    }
+
+    await redis.quit();
 }
 
 run().catch(console.error);

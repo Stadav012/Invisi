@@ -1,58 +1,53 @@
-
 import mqtt from "mqtt";
-import { Redis } from "@upstash/redis";
+import Redis from "ioredis";
 import logging from "./logging";
 
 const logger = logging("bridge");
 
-const MQTT_BROKER_URL = process.env.MQTT_BROKER_URL!;
-const MQTT_USERNAME = process.env.MQTT_USERNAME!;
-const MQTT_PASSWORD = process.env.MQTT_PASSWORD!;
-const MQTT_TOPIC = process.env.MQTT_TOPIC || "invisi/pod/+/telemetry";
-const REDIS_STREAM_KEY = process.env.REDIS_STREAM_KEY || "sensor-readings";
+const MQTT_BROKER_URL = process.env.MQTT_BROKER_URL || "mqtt://localhost:1883";
+const MQTT_TOPIC = process.env.MQTT_TOPIC || "invisi/fermentation/+/sensors";
+const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
 
-const redis = new Redis({
-    url: process.env.UPSTASH_REDIS_URL!,
-    token: process.env.UPSTASH_REDIS_TOKEN!,
-});
+const TTL_HOURS = 72;
+const TTL_MS = TTL_HOURS * 60 * 60 * 1000;
+
+const redis = new Redis(REDIS_URL);
 
 interface SensorPayload {
+    ts: number;
     batch_id: string;
-    // Position-aware temperature sensors
-    temp_center?: number;
-    temp_left?: number;
-    temp_right?: number;
-    // Position-aware gas sensors (top lid, opposite sides)
+    t_core?: number;
+    t_left?: number;
+    t_right?: number;
     gas_left?: number;
     gas_right?: number;
-    // Legacy fields (kept for backward compatibility)
-    temperature?: number;
-    humidity?: number;
-    ph?: number;
-    co2?: number;
-    recorded_at?: string;
+}
+
+function zsetKey(podId: string): string {
+    return `${podId}_telemetry`;
+}
+
+function extractPodId(topic: string): string {
+    // invisi/fermentation/pod_01/sensors → pod_01
+    const parts = topic.split("/");
+    return parts[2] || "unknown";
 }
 
 export function startBridge() {
-    const client = mqtt.connect(MQTT_BROKER_URL, {
-        username: MQTT_USERNAME,
-        password: MQTT_PASSWORD,
-        protocol: "mqtts",
-        rejectUnauthorized: true,
-    });
+    const client = mqtt.connect(MQTT_BROKER_URL);
 
     client.on("connect", () => {
-        logger.info(`Connected to MQTT broker`);
-        client.subscribe(MQTT_TOPIC, (err) => {
+        logger.info(`Connected to MQTT broker at ${MQTT_BROKER_URL}`);
+        client.subscribe(MQTT_TOPIC, { qos: 1 }, (err) => {
             if (err) {
                 logger.error(`Subscribe failed: ${err.message}`);
                 return;
             }
-            logger.info(`Subscribed to ${MQTT_TOPIC}`);
+            logger.info(`Subscribed to ${MQTT_TOPIC} (QoS 1)`);
         });
     });
 
-    client.on("message", async (_topic, message) => {
+    client.on("message", async (topic, message) => {
         try {
             const payload: SensorPayload = JSON.parse(message.toString());
 
@@ -61,27 +56,23 @@ export function startBridge() {
                 return;
             }
 
-            await redis.xadd(REDIS_STREAM_KEY, "*", {
-                batch_id: payload.batch_id,
-                // Position-aware fields
-                temp_center: String(payload.temp_center ?? ""),
-                temp_left: String(payload.temp_left ?? ""),
-                temp_right: String(payload.temp_right ?? ""),
-                gas_left: String(payload.gas_left ?? ""),
-                gas_right: String(payload.gas_right ?? ""),
-                // Legacy fields
-                temperature: String(payload.temperature ?? ""),
-                humidity: String(payload.humidity ?? ""),
-                ph: String(payload.ph ?? ""),
-                co2: String(payload.co2 ?? ""),
-                recorded_at: payload.recorded_at || new Date().toISOString(),
-            });
+            const podId = extractPodId(topic);
+            const key = zsetKey(podId);
+            const score = payload.ts || Math.floor(Date.now() / 1000);
+            const member = JSON.stringify(payload);
 
-            const tempInfo = payload.temp_center != null
-                ? `tc=${payload.temp_center} tl=${payload.temp_left} tr=${payload.temp_right} gl=${payload.gas_left} gr=${payload.gas_right}`
-                : `temp=${payload.temperature} hum=${payload.humidity} ph=${payload.ph} co2=${payload.co2}`;
+            // ZADD with Unix epoch as score
+            await redis.zadd(key, score, member);
 
-            logger.info(`Pushed reading for batch ${payload.batch_id}: ${tempInfo}`);
+            // TTL pruning — remove entries older than 72 hours
+            const cutoff = Math.floor(Date.now() / 1000) - (TTL_HOURS * 3600);
+            await redis.zremrangebyscore(key, "-inf", cutoff);
+
+            logger.info(
+                `ZADD ${key} score=${score}: ` +
+                `tc=${payload.t_core} tl=${payload.t_left} tr=${payload.t_right} ` +
+                `gl=${payload.gas_left} gr=${payload.gas_right}`
+            );
         } catch (err) {
             logger.error(`Failed to process message: ${err}`);
         }
