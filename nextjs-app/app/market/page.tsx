@@ -13,10 +13,10 @@ import {
     Layers,
     Leaf,
     Sun,
+    Eye,
+    Award,
     CheckCircle2,
     Trash2,
-    ChevronDown,
-    Filter,
 } from "lucide-react";
 
 interface Batch {
@@ -37,11 +37,13 @@ interface SortingSummary {
     good_pct: number;
 }
 
-const STATUS_FLOW = ["fermenting", "drying", "completed"] as const;
+const STATUS_FLOW = ["fermenting", "drying", "sorting", "ready", "completed"] as const;
 
 const STATUS_CONFIG: Record<string, { label: string; icon: typeof Leaf; color: string; bg: string; border: string; dot: string }> = {
     fermenting: { label: "Fermenting", icon: Leaf, color: "text-orange-700", bg: "bg-orange-50", border: "border-orange-100", dot: "bg-orange-500" },
     drying: { label: "Drying", icon: Sun, color: "text-blue-700", bg: "bg-blue-50", border: "border-blue-100", dot: "bg-blue-500" },
+    sorting: { label: "Sorting", icon: Eye, color: "text-purple-700", bg: "bg-purple-50", border: "border-purple-100", dot: "bg-purple-500" },
+    ready: { label: "Ready", icon: Award, color: "text-emerald-700", bg: "bg-emerald-50", border: "border-emerald-100", dot: "bg-emerald-500" },
     completed: { label: "Completed", icon: CheckCircle2, color: "text-green-700", bg: "bg-green-50", border: "border-green-100", dot: "bg-green-500" },
 };
 
@@ -114,10 +116,12 @@ export default function MarketPage() {
     };
 
     const filteredBatches = filter === "all" ? batches : batches.filter((b) => b.status === filter);
-    const counts = {
+    const counts: Record<string, number> = {
         all: batches.length,
         fermenting: batches.filter((b) => b.status === "fermenting").length,
         drying: batches.filter((b) => b.status === "drying").length,
+        sorting: batches.filter((b) => b.status === "sorting").length,
+        ready: batches.filter((b) => b.status === "ready").length,
         completed: batches.filter((b) => b.status === "completed").length,
     };
 
@@ -157,7 +161,7 @@ export default function MarketPage() {
                         { label: "Total", value: counts.all, icon: Package, color: "bg-gray-900" },
                         { label: "Fermenting", value: counts.fermenting, icon: Leaf, color: "bg-orange-500" },
                         { label: "Drying", value: counts.drying, icon: Sun, color: "bg-blue-500" },
-                        { label: "Completed", value: counts.completed, icon: CheckCircle2, color: "bg-green-600" },
+                        { label: "Ready", value: counts.ready, icon: Award, color: "bg-emerald-600" },
                     ].map((s) => (
                         <div key={s.label} className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
                             <div className="flex items-center gap-3 mb-3">
@@ -177,7 +181,7 @@ export default function MarketPage() {
                     className="flex items-center justify-between mb-6"
                 >
                     <div className="flex gap-2">
-                        {(["all", "fermenting", "drying", "completed"] as const).map((f) => (
+                        {(["all", "fermenting", "drying", "sorting", "ready", "completed"] as const).map((f) => (
                             <button
                                 key={f}
                                 onClick={() => setFilter(f)}

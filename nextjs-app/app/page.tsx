@@ -79,6 +79,13 @@ function batchToMetrics(batch: Batch, liveReading?: SensorReading | null) {
         value: batch.weight_kg ? `${batch.weight_kg} kg` : "—",
         progress: 100,
       };
+    case "completed":
+      return {
+        label: "Completed",
+        value: batch.weight_kg ? `${batch.weight_kg} kg` : "Done",
+        progress: 100,
+        subLabel: "Batch complete",
+      };
     default:
       return { label: "Status", value: batch.status, progress: 0 };
   }

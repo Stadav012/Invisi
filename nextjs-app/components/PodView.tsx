@@ -454,6 +454,7 @@ export function PodView({ batch }: PodViewProps) {
             drying: "#60a5fa", // Blue
             sorting: "#c084fc", // Purple
             ready: "#4ade80", // Green
+            completed: "#9ca3af", // Gray
         };
         return statusColors[batch.status] || "#ffffff";
     }, [batch.status]);

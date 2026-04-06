@@ -1,7 +1,7 @@
 import { motion } from "framer-motion";
 import { LucideIcon, Thermometer, Droplets, Scale, CircleCheck } from "lucide-react";
 
-export type BatchStatus = 'fermenting' | 'drying' | 'sorting' | 'ready';
+export type BatchStatus = 'fermenting' | 'drying' | 'sorting' | 'ready' | 'completed';
 
 interface BatchCardProps {
     id: string;
@@ -61,6 +61,14 @@ export function BatchCard({
             barColor: 'bg-green-500',
             iconBg: 'bg-green-100',
             iconColor: 'text-green-600'
+        },
+        completed: {
+            label: 'Completed',
+            textClass: 'text-gray-700',
+            bgClass: 'bg-gray-50',
+            barColor: 'bg-gray-500',
+            iconBg: 'bg-gray-100',
+            iconColor: 'text-gray-600'
         }
     };
 
