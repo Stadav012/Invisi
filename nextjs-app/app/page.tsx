@@ -7,6 +7,7 @@ import { BottomNav } from "@/components/BottomNav";
 import { PodView } from "@/components/PodView";
 import { ThermalChart } from "@/components/ThermalChart";
 import { TurnAlert } from "@/components/TurnAlert";
+import { SortingStats } from "@/components/SortingStats";
 import { BatchStatus } from "@/components/BatchCard";
 import { NewBatchModal, NewBatchData } from "@/components/NewBatchModal";
 import { Plus, Thermometer, Loader2, Sprout, Trash2 } from "lucide-react";
@@ -268,6 +269,16 @@ export default function Home() {
             className="w-full mb-12"
           >
             <ThermalChart data={hourlyData} />
+          </motion.div>
+        )}
+
+        {/* Optical Sorting Stats — only if fermenting */}
+        {activeBatch && activeBatch.status === "fermenting" && (
+          <motion.div
+            variants={{ hidden: { y: 20, opacity: 0 }, visible: { y: 0, opacity: 1 } }}
+            className="w-full mb-12"
+          >
+            <SortingStats batchId={activeBatch.id} />
           </motion.div>
         )}
 

@@ -1,24 +1,61 @@
-"""Invisi optical bean sorter — classifies cocoa beans via ResNet50 INT8 and actuates a servo gate."""
+"""Invisi optical bean sorter — classifies cocoa beans via ResNet50 INT8, buffers results in Redis."""
 
+import json
+import os
 import time
 
 import cv2
 import numpy as np
 import onnxruntime as ort
+import redis
+import requests
 from gpiozero import AngularServo
 from picamera2 import Picamera2
 
-MODEL_PATH = "/home/invisi/Desktop/invisi_models/Trained_ResNet50_INT8.onnx"
-SERVO_PIN = 18
+MODEL_PATH = os.getenv("MODEL_PATH", "/home/invisi/Desktop/invisi_models/Trained_ResNet50_INT8.onnx")
+SERVO_PIN = int(os.getenv("SERVO_PIN", "18"))
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+POD_ID = os.getenv("POD_ID", "pod_01")
+
 CONTOUR_AREA_THRESHOLD = 1000
 BEAN_PAD_PX = 15
 INPUT_SIZE = (224, 224)
 SORT_DELAY_S = 1.0
 BUFFER_FLUSH_FRAMES = 5
+LABELS = {0: "POOR BEAN", 1: "GOOD BEAN"}
 
-# ImageNet normalization constants
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406])
 IMAGENET_STD = np.array([0.229, 0.224, 0.225])
+
+
+def init_redis():
+    return redis.from_url(REDIS_URL, decode_responses=True)
+
+
+def fetch_active_batch_id():
+    """Fetch the currently fermenting batch ID from Supabase."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("WARNING: No Supabase credentials, sorting results won't have batch_id")
+        return None
+
+    url = f"{SUPABASE_URL}/rest/v1/batches?status=eq.fermenting&order=created_at.desc&limit=1&select=id"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+    }
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=5)
+        resp.raise_for_status()
+        data = resp.json()
+        if data:
+            return data[0]["id"]
+    except Exception as e:
+        print(f"Failed to fetch batch: {e}")
+
+    return None
 
 
 def init_hardware():
@@ -73,16 +110,45 @@ def extract_bean(frame):
     return np.expand_dims(img, axis=0).astype(np.float32), (x1, y1, x2, y2)
 
 
+def log_sorting_result(r, prediction, confidence, inference_ms, batch_id):
+    """Buffer sorting result in Redis ZSET for later batch sync to Supabase."""
+    ts = int(time.time())
+    entry = {
+        "ts": ts,
+        "batch_id": batch_id,
+        "prediction": int(prediction),
+        "label": LABELS[int(prediction)],
+        "confidence": round(float(confidence), 4),
+        "inference_ms": round(inference_ms, 1),
+    }
+
+    key = f"{POD_ID}_sorting"
+    r.zadd(key, {json.dumps(entry): ts})
+
+    # 72-hour TTL pruning
+    cutoff = ts - (72 * 3600)
+    r.zremrangebyscore(key, "-inf", cutoff)
+
+
 def run():
     gate, session, input_name = init_hardware()
+    r = init_redis()
+    batch_id = fetch_active_batch_id()
+
+    if batch_id:
+        print(f"Active batch: {batch_id}")
+    else:
+        print("No active batch found. Results will be buffered without batch_id.")
 
     picam2 = Picamera2()
     config = picam2.create_video_configuration(main={"size": (640, 480)})
     picam2.configure(config)
     picam2.start()
-    picam2.set_controls({"AfMode": 2, "AfRange": 2})  # Macro autofocus
+    picam2.set_controls({"AfMode": 2, "AfRange": 2})
 
     print("Invisi sorting machine online. Press 'q' to quit.")
+
+    sorted_count = {"good": 0, "poor": 0}
 
     try:
         while True:
@@ -98,26 +164,40 @@ def run():
                 start = time.time()
                 outputs = session.run(None, {input_name: input_tensor})
                 inference_ms = (time.time() - start) * 1000
-                prediction = np.argmax(outputs[0])
+
+                probabilities = outputs[0][0]
+                prediction = np.argmax(probabilities)
+                confidence = float(np.max(probabilities))
+
+                # Log to Redis
+                log_sorting_result(r, prediction, confidence, inference_ms, batch_id)
 
                 if prediction == 0:
                     label, color = "POOR BEAN", (0, 0, 255)
-                    gate.angle = -45  # Reject bin
+                    gate.angle = -45
+                    sorted_count["poor"] += 1
                 else:
                     label, color = "GOOD BEAN", (0, 255, 0)
-                    gate.angle = 45  # Accept bin
+                    gate.angle = 45
+                    sorted_count["good"] += 1
+
+                total = sorted_count["good"] + sorted_count["poor"]
+                status_line = f"Good: {sorted_count['good']} | Poor: {sorted_count['poor']} | Total: {total}"
 
                 cv2.putText(
                     display, f"{label} ({inference_ms:.1f}ms)",
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2,
                 )
+                cv2.putText(
+                    display, status_line,
+                    (10, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1,
+                )
                 cv2.imshow("Invisi Sorting Machine", display)
                 cv2.waitKey(1)
 
                 time.sleep(SORT_DELAY_S)
-                gate.angle = 0  # Reset to neutral
+                gate.angle = 0
 
-                # Flush stale frames from the buffer
                 for _ in range(BUFFER_FLUSH_FRAMES):
                     picam2.capture_array()
             else:
@@ -133,6 +213,8 @@ def run():
         gate.detach()
         picam2.stop()
         cv2.destroyAllWindows()
+        total = sorted_count["good"] + sorted_count["poor"]
+        print(f"Session: {total} beans sorted ({sorted_count['good']} good, {sorted_count['poor']} poor)")
         print("Hardware released. Shutdown complete.")
 
 

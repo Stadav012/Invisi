@@ -264,15 +264,14 @@ async function runFSM() {
 // Supabase Batch Sync (every 15 minutes)
 // =========================================================================
 
-async function batchSync() {
+async function batchSyncReadings() {
     const key = `${POD_ID}_telemetry`;
     const now = Math.floor(Date.now() / 1000);
 
-    // Get all readings since last sync
     const members = await redis.zrangebyscore(key, lastSyncTimestamp, now);
 
     if (members.length === 0) {
-        logger.info("Batch sync: no new readings");
+        logger.info("Readings sync: no new readings");
         return;
     }
 
@@ -293,25 +292,89 @@ async function batchSync() {
         });
     }
 
-    if (rows.length === 0) {
-        logger.info("Batch sync: no valid readings to sync");
-        return;
-    }
+    if (rows.length === 0) return;
 
     const { error } = await supabase.from("sensor_readings").insert(rows);
 
     if (error) {
         if (error.message.includes("foreign key")) {
-            logger.info(`Batch sync: batch no longer exists, discarding ${rows.length} readings`);
+            logger.info(`Readings sync: batch gone, discarding ${rows.length}`);
         } else {
-            logger.error(`Batch sync failed: ${error.message}`);
-            return; // Don't advance timestamp on failure
+            logger.error(`Readings sync failed: ${error.message}`);
+            return;
         }
     } else {
-        logger.info(`Batch sync: inserted ${rows.length} readings to Supabase`);
+        logger.info(`Readings sync: inserted ${rows.length} to Supabase`);
     }
 
     lastSyncTimestamp = now;
+}
+
+// =========================================================================
+// Sorting Results Batch Sync
+// =========================================================================
+
+let lastSortingSyncTimestamp = Math.floor(Date.now() / 1000);
+
+interface SortingEntry {
+    ts: number;
+    batch_id: string;
+    prediction: number;
+    label: string;
+    confidence: number;
+    inference_ms: number;
+}
+
+function parseSortingEntry(json: string): SortingEntry | null {
+    try {
+        return JSON.parse(json);
+    } catch {
+        return null;
+    }
+}
+
+async function batchSyncSorting() {
+    const key = `${POD_ID}_sorting`;
+    const now = Math.floor(Date.now() / 1000);
+
+    const members = await redis.zrangebyscore(key, lastSortingSyncTimestamp, now);
+
+    if (members.length === 0) {
+        logger.info("Sorting sync: no new results");
+        return;
+    }
+
+    const rows: Record<string, any>[] = [];
+    for (const member of members) {
+        const entry = parseSortingEntry(member);
+        if (!entry || !entry.batch_id) continue;
+
+        rows.push({
+            batch_id: entry.batch_id,
+            prediction: entry.prediction,
+            label: entry.label,
+            confidence: entry.confidence,
+            inference_ms: entry.inference_ms,
+            sorted_at: new Date(entry.ts * 1000).toISOString(),
+        });
+    }
+
+    if (rows.length === 0) return;
+
+    const { error } = await supabase.from("sorting_results").insert(rows);
+
+    if (error) {
+        if (error.message.includes("foreign key")) {
+            logger.info(`Sorting sync: batch gone, discarding ${rows.length}`);
+        } else {
+            logger.error(`Sorting sync failed: ${error.message}`);
+            return;
+        }
+    } else {
+        logger.info(`Sorting sync: inserted ${rows.length} results to Supabase`);
+    }
+
+    lastSortingSyncTimestamp = now;
 }
 
 // =========================================================================
@@ -343,12 +406,18 @@ export async function startConsumer() {
     await fsmLoop();
     setInterval(fsmLoop, POLL_INTERVAL_MS);
 
-    // Supabase batch sync loop
+    // Supabase batch sync loop — readings + sorting
     setInterval(async () => {
         try {
-            await batchSync();
+            await batchSyncReadings();
         } catch (err) {
-            logger.error(`Batch sync error: ${err}`);
+            logger.error(`Readings sync error: ${err}`);
+        }
+
+        try {
+            await batchSyncSorting();
+        } catch (err) {
+            logger.error(`Sorting sync error: ${err}`);
         }
     }, SYNC_INTERVAL_MS);
 }
