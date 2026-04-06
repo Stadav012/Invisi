@@ -124,8 +124,9 @@ export default function Home() {
       try {
         const res = await fetch(`/api/readings?batch_id=${activeBatch.id}&limit=1`);
         if (!res.ok) return;
-        const data = await res.json();
-        if (data.length > 0) setLiveReading(data[0]);
+        const json = await res.json();
+        const data = json.data ?? json;
+        if (Array.isArray(data) && data.length > 0) setLiveReading(data[0]);
       } catch { /* silent */ }
     };
 

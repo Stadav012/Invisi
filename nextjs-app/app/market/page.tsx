@@ -1,28 +1,31 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { motion } from "framer-motion";
 import { Header } from "@/components/Header";
 import { BottomNav } from "@/components/BottomNav";
 import {
-    Store,
-    Award,
-    BarChart3,
-    FileText,
-    ExternalLink,
-    TrendingUp,
     Package,
-    ShieldCheck,
+    Loader2,
+    ArrowRight,
+    Scale,
+    Calendar,
+    Layers,
     Leaf,
+    Sun,
     CheckCircle2,
+    Trash2,
+    ChevronDown,
+    Filter,
 } from "lucide-react";
 
 interface Batch {
     id: string;
     batch_number: string;
-    variety: string;
-    weight_kg: number | null;
     status: string;
+    weight_kg: number | null;
+    variety: string;
+    notes: string | null;
     fermentation_start_date: string;
     created_at: string;
 }
@@ -32,313 +35,313 @@ interface SortingSummary {
     good_count: number;
     poor_count: number;
     good_pct: number;
-    avg_inference_ms: number;
 }
 
-const QUALITY_TIERS = [
-    {
-        grade: "Premium",
-        minPct: 85,
-        color: "text-green-700",
-        bg: "bg-green-50",
-        border: "border-green-200",
-        badge: "bg-green-600",
-    },
-    {
-        grade: "Standard",
-        minPct: 60,
-        color: "text-amber-700",
-        bg: "bg-amber-50",
-        border: "border-amber-200",
-        badge: "bg-amber-500",
-    },
-    {
-        grade: "Below Grade",
-        minPct: 0,
-        color: "text-red-700",
-        bg: "bg-red-50",
-        border: "border-red-200",
-        badge: "bg-red-500",
-    },
-];
+const STATUS_FLOW = ["fermenting", "drying", "completed"] as const;
 
-function getGrade(goodPct: number) {
-    return QUALITY_TIERS.find((t) => goodPct >= t.minPct) || QUALITY_TIERS[2];
+const STATUS_CONFIG: Record<string, { label: string; icon: typeof Leaf; color: string; bg: string; border: string; dot: string }> = {
+    fermenting: { label: "Fermenting", icon: Leaf, color: "text-orange-700", bg: "bg-orange-50", border: "border-orange-100", dot: "bg-orange-500" },
+    drying: { label: "Drying", icon: Sun, color: "text-blue-700", bg: "bg-blue-50", border: "border-blue-100", dot: "bg-blue-500" },
+    completed: { label: "Completed", icon: CheckCircle2, color: "text-green-700", bg: "bg-green-50", border: "border-green-100", dot: "bg-green-500" },
+};
+
+function daysSince(dateStr: string): number {
+    return Math.max(1, Math.ceil((Date.now() - new Date(dateStr).getTime()) / 86_400_000));
 }
 
 export default function MarketPage() {
     const [batches, setBatches] = useState<Batch[]>([]);
     const [sortingMap, setSortingMap] = useState<Record<string, SortingSummary>>({});
+    const [loading, setLoading] = useState(true);
+    const [filter, setFilter] = useState<string>("all");
+    const [transitioning, setTransitioning] = useState<string | null>(null);
 
-    useEffect(() => {
-        fetch("/api/batches")
-            .then((r) => r.json())
-            .then(async (data: Batch[]) => {
-                setBatches(data);
-                const map: Record<string, SortingSummary> = {};
-                await Promise.all(
-                    data.map(async (b) => {
-                        try {
-                            const res = await fetch(`/api/sorting?batch_id=${b.id}`);
-                            if (res.ok) {
-                                const { summary } = await res.json();
-                                map[b.id] = summary;
-                            }
-                        } catch {}
-                    }),
-                );
-                setSortingMap(map);
-            })
-            .catch(() => {});
+    const fetchBatches = useCallback(async () => {
+        try {
+            const res = await fetch("/api/batches");
+            if (!res.ok) return;
+            const data = await res.json();
+            setBatches(data);
+
+            // Fetch sorting data for each
+            const map: Record<string, SortingSummary> = {};
+            await Promise.all(
+                data.map(async (b: Batch) => {
+                    try {
+                        const r = await fetch(`/api/sorting?batch_id=${b.id}`);
+                        if (r.ok) {
+                            const { summary } = await r.json();
+                            if (summary) map[b.id] = summary;
+                        }
+                    } catch {}
+                }),
+            );
+            setSortingMap(map);
+        } catch {} finally {
+            setLoading(false);
+        }
     }, []);
 
-    const completedBatches = batches.filter((b) => b.status === "completed" || b.status === "drying");
-    const activeBatches = batches.filter((b) => b.status === "fermenting");
+    useEffect(() => {
+        fetchBatches();
+    }, [fetchBatches]);
 
-    const totalWeight = batches.reduce((acc, b) => acc + (b.weight_kg || 0), 0);
-    const avgQuality =
-        Object.values(sortingMap).length > 0
-            ? Object.values(sortingMap).reduce((a, s) => a + s.good_pct, 0) / Object.values(sortingMap).length
-            : 0;
+    const transitionBatch = async (batchId: string, newStatus: string) => {
+        setTransitioning(batchId);
+        try {
+            const res = await fetch(`/api/batches/${batchId}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ status: newStatus }),
+            });
+            if (res.ok) await fetchBatches();
+        } catch {} finally {
+            setTransitioning(null);
+        }
+    };
+
+    const deleteBatch = async (batchId: string) => {
+        try {
+            await fetch(`/api/batches/${batchId}`, { method: "DELETE" });
+            await fetchBatches();
+        } catch {}
+    };
+
+    const filteredBatches = filter === "all" ? batches : batches.filter((b) => b.status === filter);
+    const counts = {
+        all: batches.length,
+        fermenting: batches.filter((b) => b.status === "fermenting").length,
+        drying: batches.filter((b) => b.status === "drying").length,
+        completed: batches.filter((b) => b.status === "completed").length,
+    };
+
+    if (loading) {
+        return (
+            <div className="min-h-screen bg-invisi-light flex items-center justify-center">
+                <Loader2 className="animate-spin text-invisi-green" size={40} />
+            </div>
+        );
+    }
 
     return (
-        <div className="min-h-screen bg-[#F8F7F4]">
+        <div className="min-h-screen bg-invisi-light pb-32 font-sans text-gray-900">
             <Header />
 
             <motion.main
                 initial="hidden"
                 animate="visible"
-                variants={{ hidden: {}, visible: { transition: { staggerChildren: 0.06 } } }}
-                className="max-w-7xl mx-auto px-6 md:px-10 py-8 pb-32"
+                variants={{ hidden: { opacity: 0 }, visible: { opacity: 1, transition: { staggerChildren: 0.1 } } }}
+                className="mx-auto max-w-7xl px-6 py-8 md:px-10"
             >
-                {/* Title */}
+                {/* Header */}
                 <motion.div
                     variants={{ hidden: { y: 20, opacity: 0 }, visible: { y: 0, opacity: 1 } }}
                     className="mb-8"
                 >
-                    <h1 className="text-3xl font-bold text-gray-900">Market & Traceability</h1>
-                    <p className="text-gray-500 mt-1">Quality grading, certifications, and batch traceability</p>
+                    <h1 className="text-2xl font-bold text-gray-900">Batch Manager</h1>
+                    <p className="text-sm text-gray-500 mt-0.5">Track, transition, and manage your cocoa batches</p>
                 </motion.div>
 
-                {/* Overview Stats */}
+                {/* Summary Cards */}
                 <motion.div
                     variants={{ hidden: { y: 20, opacity: 0 }, visible: { y: 0, opacity: 1 } }}
                     className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8"
                 >
                     {[
-                        {
-                            label: "Total Batches",
-                            value: batches.length,
-                            icon: Package,
-                            color: "bg-[#2D6A4F]",
-                        },
-                        {
-                            label: "Total Weight",
-                            value: `${totalWeight.toFixed(0)} kg`,
-                            icon: BarChart3,
-                            color: "bg-amber-600",
-                        },
-                        {
-                            label: "Avg Quality",
-                            value: avgQuality > 0 ? `${avgQuality.toFixed(0)}%` : "—",
-                            icon: TrendingUp,
-                            color: "bg-purple-600",
-                        },
-                        {
-                            label: "Certifiable",
-                            value: Object.values(sortingMap).filter((s) => s.good_pct >= 85).length,
-                            icon: ShieldCheck,
-                            color: "bg-blue-600",
-                        },
-                    ].map((stat) => (
-                        <div
-                            key={stat.label}
-                            className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm hover:shadow-md transition-shadow"
-                        >
+                        { label: "Total", value: counts.all, icon: Package, color: "bg-gray-900" },
+                        { label: "Fermenting", value: counts.fermenting, icon: Leaf, color: "bg-orange-500" },
+                        { label: "Drying", value: counts.drying, icon: Sun, color: "bg-blue-500" },
+                        { label: "Completed", value: counts.completed, icon: CheckCircle2, color: "bg-green-600" },
+                    ].map((s) => (
+                        <div key={s.label} className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
                             <div className="flex items-center gap-3 mb-3">
-                                <div className={`h-9 w-9 rounded-xl ${stat.color} flex items-center justify-center`}>
-                                    <stat.icon size={18} className="text-white" />
+                                <div className={`h-9 w-9 rounded-xl ${s.color} flex items-center justify-center`}>
+                                    <s.icon size={18} className="text-white" />
                                 </div>
-                                <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">
-                                    {stat.label}
-                                </span>
+                                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">{s.label}</span>
                             </div>
-                            <p className="text-3xl font-bold text-gray-900">{stat.value}</p>
+                            <p className="text-3xl font-bold text-gray-900">{s.value}</p>
                         </div>
                     ))}
                 </motion.div>
 
-                {/* Active Fermentations */}
-                {activeBatches.length > 0 && (
-                    <motion.div
-                        variants={{ hidden: { y: 20, opacity: 0 }, visible: { y: 0, opacity: 1 } }}
-                        className="mb-8"
-                    >
-                        <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">
-                            Active Fermentations
-                        </h2>
-                        <div className="grid md:grid-cols-2 gap-4">
-                            {activeBatches.map((batch) => (
-                                <div
-                                    key={batch.id}
-                                    className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-2xl border border-green-100 p-5"
-                                >
-                                    <div className="flex items-center justify-between mb-3">
-                                        <div className="flex items-center gap-3">
-                                            <div className="h-10 w-10 rounded-xl bg-[#2D6A4F] flex items-center justify-center">
-                                                <Leaf size={18} className="text-white" />
-                                            </div>
-                                            <div>
-                                                <p className="font-bold text-gray-900">{batch.batch_number}</p>
-                                                <p className="text-xs text-gray-500">{batch.variety}</p>
-                                            </div>
-                                        </div>
-                                        <span className="text-xs font-bold text-green-700 bg-green-100 px-3 py-1 rounded-full">
-                                            Fermenting
-                                        </span>
-                                    </div>
-                                    <div className="flex items-center justify-between text-sm text-gray-600">
-                                        <span>{batch.weight_kg ?? "—"} kg</span>
-                                        <span>Started {new Date(batch.fermentation_start_date).toLocaleDateString()}</span>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </motion.div>
-                )}
-
-                {/* Batch Quality Cards */}
+                {/* Filter Tabs */}
                 <motion.div
                     variants={{ hidden: { y: 20, opacity: 0 }, visible: { y: 0, opacity: 1 } }}
+                    className="flex items-center justify-between mb-6"
                 >
-                    <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">
-                        Batch Quality Reports
-                    </h2>
-                    {batches.length === 0 && (
-                        <div className="bg-white rounded-3xl border border-gray-100 p-12 text-center">
-                            <Store size={40} className="mx-auto text-gray-200 mb-4" />
-                            <p className="text-gray-400 font-medium">No batches yet</p>
-                            <p className="text-xs text-gray-300 mt-1">Create your first batch from the Home tab</p>
-                        </div>
-                    )}
-                    <div className="space-y-4">
-                        {batches.map((batch) => {
+                    <div className="flex gap-2">
+                        {(["all", "fermenting", "drying", "completed"] as const).map((f) => (
+                            <button
+                                key={f}
+                                onClick={() => setFilter(f)}
+                                className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors capitalize ${
+                                    filter === f
+                                        ? "bg-gray-900 text-white"
+                                        : "text-gray-500 hover:bg-gray-100"
+                                }`}
+                            >
+                                {f} ({counts[f]})
+                            </button>
+                        ))}
+                    </div>
+                </motion.div>
+
+                {/* Batch List */}
+                {filteredBatches.length === 0 ? (
+                    <motion.div
+                        variants={{ hidden: { y: 20, opacity: 0 }, visible: { y: 0, opacity: 1 } }}
+                        className="rounded-2xl border border-gray-100 bg-white p-16 text-center shadow-sm"
+                    >
+                        <Package size={40} className="mx-auto text-gray-200 mb-4" />
+                        <p className="text-gray-400 font-medium">No batches in this category</p>
+                    </motion.div>
+                ) : (
+                    <motion.div
+                        variants={{ hidden: { y: 20, opacity: 0 }, visible: { y: 0, opacity: 1 } }}
+                        className="space-y-4"
+                    >
+                        {filteredBatches.map((batch) => {
+                            const cfg = STATUS_CONFIG[batch.status] || STATUS_CONFIG.fermenting;
+                            const StatusIcon = cfg.icon;
                             const sorting = sortingMap[batch.id];
-                            const grade = sorting ? getGrade(sorting.good_pct) : null;
+                            const days = daysSince(batch.fermentation_start_date);
+
+                            // Determine next status
+                            const currentIdx = STATUS_FLOW.indexOf(batch.status as any);
+                            const nextStatus = currentIdx >= 0 && currentIdx < STATUS_FLOW.length - 1
+                                ? STATUS_FLOW[currentIdx + 1]
+                                : null;
+                            const nextCfg = nextStatus ? STATUS_CONFIG[nextStatus] : null;
 
                             return (
                                 <div
                                     key={batch.id}
-                                    className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm hover:shadow-md transition-all"
+                                    className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm hover:shadow-md transition-shadow"
                                 >
-                                    <div className="flex items-center justify-between mb-4">
-                                        <div className="flex items-center gap-3">
-                                            <div className="h-10 w-10 rounded-xl bg-gray-900 flex items-center justify-center">
-                                                <FileText size={18} className="text-white" />
+                                    {/* Top row */}
+                                    <div className="flex items-start justify-between mb-4">
+                                        <div className="flex items-center gap-4">
+                                            <div className={`h-12 w-12 rounded-2xl ${cfg.bg} ${cfg.border} border flex items-center justify-center`}>
+                                                <StatusIcon size={22} className={cfg.color} />
                                             </div>
                                             <div>
-                                                <p className="font-bold text-gray-900">{batch.batch_number}</p>
-                                                <p className="text-xs text-gray-400">
-                                                    {batch.variety} · {batch.weight_kg ?? "—"} kg
+                                                <h3 className="text-lg font-bold text-gray-900">{batch.batch_number}</h3>
+                                                <p className="text-xs text-gray-400">{batch.variety} · {batch.weight_kg ?? "—"} kg</p>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <span className={`px-3 py-1 text-xs font-bold rounded-full ${cfg.bg} ${cfg.color} ${cfg.border} border capitalize`}>
+                                                {cfg.label}
+                                            </span>
+                                            <button
+                                                onClick={() => deleteBatch(batch.id)}
+                                                className="p-2 rounded-xl text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+                                                title="Delete batch"
+                                            >
+                                                <Trash2 size={14} />
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {/* Info Strip */}
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4 py-4 border-y border-gray-50">
+                                        <div className="flex items-center gap-2">
+                                            <Calendar size={14} className="text-gray-300" />
+                                            <div>
+                                                <p className="text-xs text-gray-400">Started</p>
+                                                <p className="text-sm font-bold text-gray-900">
+                                                    {new Date(batch.fermentation_start_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                                                 </p>
                                             </div>
                                         </div>
-                                        {grade && (
-                                            <span
-                                                className={`text-xs font-bold text-white px-3 py-1 rounded-full ${grade.badge}`}
-                                            >
-                                                {grade.grade}
-                                            </span>
-                                        )}
+                                        <div className="flex items-center gap-2">
+                                            <Layers size={14} className="text-gray-300" />
+                                            <div>
+                                                <p className="text-xs text-gray-400">Duration</p>
+                                                <p className="text-sm font-bold text-gray-900">{days} day{days !== 1 ? "s" : ""}</p>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <Scale size={14} className="text-gray-300" />
+                                            <div>
+                                                <p className="text-xs text-gray-400">Weight</p>
+                                                <p className="text-sm font-bold text-gray-900">{batch.weight_kg ?? "—"} kg</p>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <Package size={14} className="text-gray-300" />
+                                            <div>
+                                                <p className="text-xs text-gray-400">Quality</p>
+                                                <p className="text-sm font-bold text-gray-900">
+                                                    {sorting ? `${sorting.good_pct.toFixed(0)}% Good` : "Pending"}
+                                                </p>
+                                            </div>
+                                        </div>
                                     </div>
 
-                                    {sorting && sorting.total_sorted > 0 ? (
-                                        <div className="grid grid-cols-4 gap-4">
-                                            <div>
-                                                <p className="text-xs text-gray-400 mb-0.5">Total Sorted</p>
-                                                <p className="text-lg font-bold text-gray-900">{sorting.total_sorted}</p>
-                                            </div>
-                                            <div>
-                                                <p className="text-xs text-gray-400 mb-0.5">Good Beans</p>
-                                                <p className="text-lg font-bold text-green-700">{sorting.good_count}</p>
-                                            </div>
-                                            <div>
-                                                <p className="text-xs text-gray-400 mb-0.5">Quality</p>
-                                                <p className="text-lg font-bold text-gray-900">{sorting.good_pct.toFixed(0)}%</p>
-                                            </div>
-                                            <div>
-                                                <p className="text-xs text-gray-400 mb-0.5">Avg Speed</p>
-                                                <p className="text-lg font-bold text-gray-900">{sorting.avg_inference_ms.toFixed(0)}ms</p>
-                                            </div>
-                                        </div>
-                                    ) : (
-                                        <div className="flex items-center gap-2 text-sm text-gray-300">
-                                            <Award size={14} />
-                                            <span>No sorting data — awaiting optical sorter results</span>
-                                        </div>
-                                    )}
-
-                                    {/* Quality bar */}
+                                    {/* Sorting progress (if data exists) */}
                                     {sorting && sorting.total_sorted > 0 && (
-                                        <div className="mt-4">
-                                            <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+                                        <div className="mb-4">
+                                            <div className="flex justify-between text-xs text-gray-400 mb-1">
+                                                <span>{sorting.good_count} good · {sorting.poor_count} poor</span>
+                                                <span>{sorting.total_sorted} sorted</span>
+                                            </div>
+                                            <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
                                                 <div
-                                                    className="h-full rounded-full bg-gradient-to-r from-green-500 to-emerald-500 transition-all"
+                                                    className="h-full rounded-full bg-gray-900 transition-all"
                                                     style={{ width: `${sorting.good_pct}%` }}
                                                 />
                                             </div>
-                                            <div className="flex justify-between text-xs text-gray-400 mt-1">
-                                                <span>Quality Score</span>
-                                                <span>{sorting.good_pct.toFixed(1)}%</span>
-                                            </div>
                                         </div>
                                     )}
+
+                                    {/* Notes */}
+                                    {batch.notes && (
+                                        <p className="text-xs text-gray-400 mb-4 italic">"{batch.notes}"</p>
+                                    )}
+
+                                    {/* Action: Transition to next state */}
+                                    {nextStatus && nextCfg && (
+                                        <button
+                                            onClick={() => transitionBatch(batch.id, nextStatus)}
+                                            disabled={transitioning === batch.id}
+                                            className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl border-2 ${nextCfg.border} ${nextCfg.color} font-bold text-sm hover:${nextCfg.bg} transition-colors disabled:opacity-50`}
+                                        >
+                                            {transitioning === batch.id ? (
+                                                <Loader2 size={16} className="animate-spin" />
+                                            ) : (
+                                                <>
+                                                    Move to {nextCfg.label}
+                                                    <ArrowRight size={16} />
+                                                </>
+                                            )}
+                                        </button>
+                                    )}
+
+                                    {/* Timeline - status flow */}
+                                    <div className="flex items-center justify-center gap-2 mt-4">
+                                        {STATUS_FLOW.map((s, i) => {
+                                            const sCfg = STATUS_CONFIG[s];
+                                            const reached = STATUS_FLOW.indexOf(batch.status as any) >= i;
+                                            return (
+                                                <div key={s} className="flex items-center gap-2">
+                                                    <div className={`h-2 w-2 rounded-full ${reached ? sCfg.dot : "bg-gray-200"}`} />
+                                                    <span className={`text-xs font-medium ${reached ? sCfg.color : "text-gray-300"}`}>
+                                                        {sCfg.label}
+                                                    </span>
+                                                    {i < STATUS_FLOW.length - 1 && (
+                                                        <div className={`w-6 h-[1px] ${reached ? "bg-gray-300" : "bg-gray-200"}`} />
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
                                 </div>
                             );
                         })}
-                    </div>
-                </motion.div>
-
-                {/* Traceability Info */}
-                <motion.div
-                    variants={{ hidden: { y: 20, opacity: 0 }, visible: { y: 0, opacity: 1 } }}
-                    className="mt-8 bg-gradient-to-br from-gray-900 to-gray-800 rounded-3xl p-8 text-white"
-                >
-                    <div className="flex items-center gap-4 mb-6">
-                        <div className="h-12 w-12 rounded-2xl bg-white/10 flex items-center justify-center">
-                            <ShieldCheck size={24} />
-                        </div>
-                        <div>
-                            <h3 className="text-xl font-bold">Traceability & Certification</h3>
-                            <p className="text-sm text-gray-400">Each batch is tracked from pod to market</p>
-                        </div>
-                    </div>
-                    <div className="grid md:grid-cols-3 gap-4">
-                        {[
-                            {
-                                icon: CheckCircle2,
-                                title: "IoT Verified",
-                                desc: "Sensor data cryptographically signed at the edge",
-                            },
-                            {
-                                icon: Award,
-                                title: "AI Graded",
-                                desc: "ResNet50-based optical sorting with confidence scores",
-                            },
-                            {
-                                icon: ExternalLink,
-                                title: "Export Ready",
-                                desc: "Generate PDF traceability reports per batch",
-                            },
-                        ].map((item) => (
-                            <div key={item.title} className="bg-white/5 rounded-2xl p-4 border border-white/10">
-                                <item.icon size={20} className="text-green-400 mb-3" />
-                                <p className="font-bold text-sm mb-1">{item.title}</p>
-                                <p className="text-xs text-gray-400">{item.desc}</p>
-                            </div>
-                        ))}
-                    </div>
-                </motion.div>
+                    </motion.div>
+                )}
             </motion.main>
 
             <BottomNav />
