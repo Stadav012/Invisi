@@ -5,10 +5,10 @@ Wants=mosquitto.service redis-server.service
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/Invisi/nextjs-app
-EnvironmentFile=/home/pi/Invisi/nextjs-app/.env.local
-ExecStart=/home/pi/.bun/bin/bun run telemetry/index.ts
+User=invisi
+WorkingDirectory=/home/invisi/invisi/nextjs-app
+EnvironmentFile=-/home/invisi/invisi/nextjs-app/.env.local
+ExecStart=/home/invisi/.bun/bin/bun run telemetry/index.ts
 Restart=always
 RestartSec=5
 
