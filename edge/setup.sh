@@ -3,6 +3,8 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+
 echo "=== Invisi Edge Setup ==="
 
 sudo apt update && sudo apt upgrade -y
@@ -10,7 +12,7 @@ sudo apt update && sudo apt upgrade -y
 # Mosquitto MQTT broker
 echo "Installing Mosquitto..."
 sudo apt install -y mosquitto mosquitto-clients
-sudo cp "$(dirname "$0")/mosquitto.conf" /etc/mosquitto/conf.d/invisi.conf
+sudo cp "$SCRIPT_DIR/mosquitto.conf" /etc/mosquitto/conf.d/invisi.conf
 sudo systemctl enable mosquitto
 sudo systemctl restart mosquitto
 echo "Mosquitto running on port 1883"
@@ -31,12 +33,12 @@ fi
 
 # Install telemetry dependencies
 echo "Installing telemetry dependencies..."
-cd "$(dirname "$0")/../nextjs-app"
+cd "$SCRIPT_DIR/../nextjs-app"
 bun install
 
 # Install systemd service
 echo "Installing systemd service..."
-sudo cp "$(dirname "$0")/invisi-telemetry.service" /etc/systemd/system/
+sudo cp "$SCRIPT_DIR/invisi-telemetry.service" /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable invisi-telemetry
 sudo systemctl start invisi-telemetry
