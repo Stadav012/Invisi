@@ -29,6 +29,7 @@ LABELS = {0: "POOR BEAN", 1: "GOOD BEAN"}
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406])
 IMAGENET_STD = np.array([0.229, 0.224, 0.225])
 
+HEADLESS_MODE = os.getenv("HEADLESS_MODE", "1") == "1"
 
 def init_redis():
     return redis.from_url(REDIS_URL, decode_responses=True)
@@ -146,7 +147,7 @@ def run():
     picam2.start()
     picam2.set_controls({"AfMode": 2, "AfRange": 2})
 
-    print("Invisi sorting machine online. Press 'q' to quit.")
+    print("Invisi sorting machine online. Press CTRL+C to quit.")
 
     sorted_count = {"good": 0, "poor": 0}
 
@@ -192,8 +193,11 @@ def run():
                     display, status_line,
                     (10, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1,
                 )
-                cv2.imshow("Invisi Sorting Machine", display)
-                cv2.waitKey(1)
+                if not HEADLESS_MODE:
+                    cv2.imshow("Invisi Sorting Machine", display)
+                    cv2.waitKey(1)
+                else:
+                    print(status_line) # Print to terminal instead in headless mode
 
                 time.sleep(SORT_DELAY_S)
                 gate.angle = 0
@@ -201,18 +205,23 @@ def run():
                 for _ in range(BUFFER_FLUSH_FRAMES):
                     picam2.capture_array()
             else:
-                cv2.putText(
-                    display, "STANDBY: Waiting for bean...",
-                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2,
-                )
-                cv2.imshow("Invisi Sorting Machine", display)
+                if not HEADLESS_MODE:
+                    cv2.putText(
+                        display, "STANDBY: Waiting for bean...",
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2,
+                    )
+                    cv2.imshow("Invisi Sorting Machine", display)
 
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
+            if not HEADLESS_MODE:
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+    except KeyboardInterrupt:
+        print("\nShutdown signal received (CTRL+C).")
     finally:
         gate.detach()
         picam2.stop()
-        cv2.destroyAllWindows()
+        if not HEADLESS_MODE:
+            cv2.destroyAllWindows()
         total = sorted_count["good"] + sorted_count["poor"]
         print(f"Session: {total} beans sorted ({sorted_count['good']} good, {sorted_count['poor']} poor)")
         print("Hardware released. Shutdown complete.")
