@@ -145,7 +145,9 @@ def run():
     config = picam2.create_video_configuration(main={"size": (640, 480)})
     picam2.configure(config)
     picam2.start()
-    picam2.set_controls({"AfMode": 2, "AfRange": 2})
+    # AfMode 2: Continuous Auto Focus
+    # AfRange 1: Macro (restrict focus hunting to close-up objects)
+    picam2.set_controls({"AfMode": 2, "AfRange": 1})
 
     print("Invisi sorting machine online. Press CTRL+C to quit.")
 
