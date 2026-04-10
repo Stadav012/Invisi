@@ -30,7 +30,6 @@ IMAGENET_MEAN = np.array([0.485, 0.456, 0.406])
 IMAGENET_STD = np.array([0.229, 0.224, 0.225])
 
 HEADLESS_MODE = os.getenv("HEADLESS_MODE", "0") == "1"
-current_lens_pos = 10.0 # Default focal length in Diopters (1/m). 10.0 = 10cm focus distance
 
 def init_redis():
     return redis.from_url(REDIS_URL, decode_responses=True)
@@ -147,10 +146,8 @@ def run():
     picam2.configure(config)
     picam2.start()
     
-    # AfMode 0: Manual Focus. 
-    # Optical sorters require strict manual focus because falling objects 
-    # move too fast for contrast-based tracking.
-    picam2.set_controls({"AfMode": 0, "LensPosition": current_lens_pos})
+    # Force continuous Macro autofocus
+    picam2.set_controls({"AfMode": 2, "AfRange": 2})
 
     print("Invisi sorting machine online. Press CTRL+C to quit.")
 
@@ -199,20 +196,8 @@ def run():
                     (10, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1,
                 )
                 if not HEADLESS_MODE:
-                    cv2.putText(
-                        display, f"Focus [W/S]: {current_lens_pos:.1f}",
-                        (10, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1,
-                    )
                     cv2.imshow("Invisi Sorting Machine", display)
-                    key = cv2.waitKey(1) & 0xFF
-                    if key == ord('w'):
-                        global current_lens_pos
-                        current_lens_pos = min(25.0, current_lens_pos + 0.5)
-                        picam2.set_controls({"LensPosition": current_lens_pos})
-                    elif key == ord('s'):
-                        global current_lens_pos
-                        current_lens_pos = max(0.0, current_lens_pos - 0.5)
-                        picam2.set_controls({"LensPosition": current_lens_pos})
+                    cv2.waitKey(1)
                 else:
                     print(status_line) # Print to terminal instead in headless mode
 
@@ -227,24 +212,11 @@ def run():
                         display, "STANDBY: Waiting for bean...",
                         (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2,
                     )
-                    cv2.putText(
-                        display, f"Focus Dial [W=Closer, S=Farther]: {current_lens_pos:.1f}",
-                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2,
-                    )
                     cv2.imshow("Invisi Sorting Machine", display)
 
             if not HEADLESS_MODE:
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord("q"):
+                if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
-                elif key == ord('w'):
-                    global current_lens_pos
-                    current_lens_pos = min(25.0, current_lens_pos + 0.5)
-                    picam2.set_controls({"LensPosition": current_lens_pos})
-                elif key == ord('s'):
-                    global current_lens_pos
-                    current_lens_pos = max(0.0, current_lens_pos - 0.5)
-                    picam2.set_controls({"LensPosition": current_lens_pos})
     except KeyboardInterrupt:
         print("\nShutdown signal received (CTRL+C).")
     finally:
