@@ -12,7 +12,7 @@ import requests
 from gpiozero import AngularServo
 from picamera2 import Picamera2
 
-MODEL_PATH = os.getenv("MODEL_PATH", "/home/invisi/Desktop/invisi_models/Trained_ResNet50_INT8.onnx")
+MODEL_PATH = os.getenv("MODEL_PATH", "/home/invisi/Desktop/invisi_models/Trained_MobileNetV3_INT8.onnx")
 SERVO_PIN = int(os.getenv("SERVO_PIN", "18"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
@@ -69,7 +69,7 @@ def init_hardware():
     options.intra_op_num_threads = 2
     options.inter_op_num_threads = 2
 
-    print("Loading ResNet50 INT8 model...")
+    print("Loading AI model...")
     session = ort.InferenceSession(
         MODEL_PATH, sess_options=options, providers=["CPUExecutionProvider"]
     )
@@ -93,8 +93,8 @@ def extract_bean(frame):
     if not contours:
         return None, None
 
-    # Filter out dust (<500) and massive background objects like clothing (>50000)
-    valid_contours = [c for c in contours if 500 < cv2.contourArea(c) < 50000]
+    # Filter out dust/shadows (<2500 pixels) and massive background objects like clothing (>50000)
+    valid_contours = [c for c in contours if 2500 < cv2.contourArea(c) < 50000]
     if not valid_contours:
         return None, None
 
