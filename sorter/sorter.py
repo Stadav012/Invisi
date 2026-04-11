@@ -178,8 +178,20 @@ def run():
             
             # 1. Preprocess the frame and get the bounding box coordinates
             input_tensor, bbox_coords = extract_and_preprocess(frame_rgb)
+            
+            # --- VIRTUAL TRIPWIRE LOGIC ---
+            # To prevent the AI from making erratic predictions on half-visible beans entering 
+            # the edge of the frame, we force the AI to ignore the bean until it rolls perfectly 
+            # over the center horizontal 'tripwire' of the camera view.
+            if bbox_coords is not None:
+                _, y1, _, y2 = bbox_coords
+                bean_center_y = (y1 + y2) / 2
+                
+                # If bean centroid is not in the exact center 'kill zone' (y=220 to 260), ignore it!
+                if bean_center_y < 200 or bean_center_y > 280:
+                    bbox_coords = None
 
-            # 2. Run Inference ONLY if a real bean is detected!
+            # 2. Run Inference ONLY if the bean is directly on the tripwire!
             if bbox_coords is not None:
                 start_time = time.time()
                 outputs = session.run(None, {input_name: input_tensor})
@@ -239,10 +251,15 @@ def run():
                     picam2.capture_array()
             
             else:
-                # NO BEAN DETECTED - EMPTY CONVEYOR BELT. Ignore everything!
+                # NO BEAN DETECTED ON THE TRIPWIRE. Ignore everything!
                 display_frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-                cv2.putText(display_frame, "EMPTY BELT - WAITING", (10, 30), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                
+                # Draw the Virtual Tripwire in yellow for visual calibration
+                cv2.line(display_frame, (0, 200), (640, 200), (0, 255, 255), 1)
+                cv2.line(display_frame, (0, 280), (640, 280), (0, 255, 255), 1)
+                
+                cv2.putText(display_frame, "EMPTY BELT - WAITING FOR TRIPWIRE", (10, 30), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                 
                 total = sorted_count["good"] + sorted_count["poor"]
                 cv2.putText(
