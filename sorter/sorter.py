@@ -160,12 +160,10 @@ def run():
     picam2.configure(config)
     picam2.start()
     
-    # Force continuous autofocus, but RESTRICT the hardware metering window 
-    # to the exact center 40% of the screen so it ignores background clutter!
+    # Force continuous autofocus. Removed experimental AFWindows to fix hardware geometry crash.
     picam2.set_controls({
         "AfMode": 2, 
-        "AfRange": 2,
-        "AfWindows": (0.3, 0.3, 0.4, 0.4) # x, y, width, height scale
+        "AfRange": 2
     })
 
     print("Invisi sorting machine online. Press CTRL+C to quit.")
