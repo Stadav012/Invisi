@@ -23,9 +23,6 @@ CONTOUR_AREA_THRESHOLD = 1000
 BEAN_PAD_PX = 15
 INPUT_SIZE = (224, 224)
 
-# Create MOG2 Background Subtractor to isolate moving beans from static shadows/reflections
-bg_subtractor = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=50, detectShadows=False)
-
 # --- TIMING TUNING ---
 # Time (in seconds) it takes the bean to travel from the camera lens to the physical gate
 CONVEYOR_BELT_DELAY_S = 0.25 
@@ -92,15 +89,11 @@ def extract_and_preprocess(frame):
     if frame.shape[-1] == 4:
         frame = frame[:, :, :3] 
         
-    # --- DYNAMIC ROI EXTRACTION (MOG2) ---
-    # This subtracts the 'empty' conveyor belt background, leaving ONLY the moving bean!
-    fg_mask = bg_subtractor.apply(frame)
-    
-    # Clean up tiny specks of dust from the mask using morphological opening
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel)
-    
-    contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # --- DYNAMIC ROI EXTRACTION ---
+    gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+    blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     bbox_coords = None
     cropped_frame = frame.copy() # Default to full frame if nothing is found
