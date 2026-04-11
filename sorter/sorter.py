@@ -22,7 +22,12 @@ POD_ID = os.getenv("POD_ID", "pod_01")
 CONTOUR_AREA_THRESHOLD = 1000
 BEAN_PAD_PX = 15
 INPUT_SIZE = (224, 224)
-SORT_DELAY_S = 1.0
+
+# --- TIMING TUNING ---
+# Time (in seconds) it takes the bean to travel from the camera lens to the physical gate
+CONVEYOR_BELT_DELAY_S = 0.25 
+SORT_CLEARANCE_DELAY_S = 0.5
+
 BUFFER_FLUSH_FRAMES = 5
 LABELS = {0: "POOR BEAN", 1: "GOOD BEAN"}
 
@@ -174,71 +179,81 @@ def run():
             # 1. Preprocess the frame and get the bounding box coordinates
             input_tensor, bbox_coords = extract_and_preprocess(frame_rgb)
 
-            # 2. Run Inference
-            start_time = time.time()
-            outputs = session.run(None, {input_name: input_tensor})
-            inference_ms = (time.time() - start_time) * 1000
-            
-            probabilities = outputs[0][0]
-            prediction = np.argmax(probabilities)
-            confidence = float(np.max(probabilities))
-            
-            # Log to Redis (Telemetry Platform Integration)
+            # 2. Run Inference ONLY if a real bean is detected!
             if bbox_coords is not None:
-                # We only log to Redis and fire Servo if a bean was actually detected
+                start_time = time.time()
+                outputs = session.run(None, {input_name: input_tensor})
+                inference_ms = (time.time() - start_time) * 1000
+                
+                probabilities = outputs[0][0]
+                prediction = np.argmax(probabilities)
+                confidence = float(np.max(probabilities))
+                
+                # We only log to Redis and fire Servo since a bean was actually detected
                 log_sorting_result(r, prediction, confidence, inference_ms, batch_id)
+                
+                # --- SYNCHRONIZATION DELAY ---
+                # Wait for the moving conveyor belt to carry the bean to the gate
+                time.sleep(CONVEYOR_BELT_DELAY_S)
+                
                 if prediction == 0:
                     gate.angle = -45
                     sorted_count["poor"] += 1
+                    label = "POOR BEAN"
+                    color = (0, 0, 255) # Red
                 else:
                     gate.angle = 45
                     sorted_count["good"] += 1
-            
-            # 3. Screen Overlay Formatting
-            display_frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                    label = "GOOD BEAN"
+                    color = (0, 255, 0) # Green
+                
+                # 3. Screen Overlay Formatting
+                display_frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
-            # --- DRAW THE BOUNDING BOX ---
-            if bbox_coords is not None:
                 x1, y1, x2, y2 = bbox_coords
-                # Draw a Blue box (BGR format: 255, 0, 0) with a thickness of 2
                 cv2.rectangle(display_frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                # Add a small text label to the box
                 cv2.putText(display_frame, "Target ROI", (x1, y1 - 10), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
 
-            # Set Prediction Colors
-            if prediction == 0:
-                label = "POOR BEAN"
-                color = (0, 0, 255) # Red
-            else:
-                label = "GOOD BEAN"
-                color = (0, 255, 0) # Green
+                cv2.putText(display_frame, f"{label} ({inference_ms:.1f}ms)", (10, 30), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+                
+                total = sorted_count["good"] + sorted_count["poor"]
+                status_line = f"Good: {sorted_count['good']} | Poor: {sorted_count['poor']} | Total: {total}"
+                cv2.putText(
+                    display_frame, status_line,
+                    (10, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1,
+                )
 
-            # Draw Prediction Text
-            cv2.putText(display_frame, f"{label} ({inference_ms:.1f}ms)", (10, 30), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-            
-            total = sorted_count["good"] + sorted_count["poor"]
-            status_line = f"Good: {sorted_count['good']} | Poor: {sorted_count['poor']} | Total: {total}"
-            cv2.putText(
-                display_frame, status_line,
-                (10, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1,
-            )
-
-            # Show the video feed (if not headless)
-            if not HEADLESS_MODE:
-                cv2.imshow("Invisi Vision Test", display_frame)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
-            else:
-                if bbox_coords is not None:
+                if not HEADLESS_MODE:
+                    cv2.imshow("Invisi Vision Test", display_frame)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        break
+                else:
                     print(status_line)
-            
-            if bbox_coords is not None:
-                time.sleep(SORT_DELAY_S)
+                
+                # Wait for bean to physically clear the gate before resetting
+                time.sleep(SORT_CLEARANCE_DELAY_S)
                 gate.angle = 0
                 for _ in range(BUFFER_FLUSH_FRAMES):
                     picam2.capture_array()
+            
+            else:
+                # NO BEAN DETECTED - EMPTY CONVEYOR BELT. Ignore everything!
+                display_frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                cv2.putText(display_frame, "EMPTY BELT - WAITING", (10, 30), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                
+                total = sorted_count["good"] + sorted_count["poor"]
+                cv2.putText(
+                    display_frame, f"Good: {sorted_count['good']} | Poor: {sorted_count['poor']} | Total: {total}",
+                    (10, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1,
+                )
+                
+                if not HEADLESS_MODE:
+                    cv2.imshow("Invisi Vision Test", display_frame)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        break
 
     except KeyboardInterrupt:
         print("\nShutdown signal received (CTRL+C).")
