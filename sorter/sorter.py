@@ -93,11 +93,25 @@ def extract_bean(frame):
     if not contours:
         return None, None
 
-    largest = max(contours, key=cv2.contourArea)
-    if cv2.contourArea(largest) < CONTOUR_AREA_THRESHOLD:
+    # Filter out dust (<500) and massive background objects like clothing (>50000)
+    valid_contours = [c for c in contours if 500 < cv2.contourArea(c) < 50000]
+    if not valid_contours:
         return None, None
 
-    x, y, w, h = cv2.boundingRect(largest)
+    # Find the contour closest to the absolute center of the screen
+    center_x, center_y = frame.shape[1] // 2, frame.shape[0] // 2
+
+    def dist_to_center(c):
+        M = cv2.moments(c)
+        if M["m00"] == 0:
+            return float('inf')
+        cx = int(M["m10"] / M["m00"])
+        cy = int(M["m01"] / M["m00"])
+        return (cx - center_x)**2 + (cy - center_y)**2
+
+    target_contour = min(valid_contours, key=dist_to_center)
+
+    x, y, w, h = cv2.boundingRect(target_contour)
     x1 = max(0, x - BEAN_PAD_PX)
     y1 = max(0, y - BEAN_PAD_PX)
     x2 = min(frame.shape[1], x + w + BEAN_PAD_PX)
@@ -146,8 +160,13 @@ def run():
     picam2.configure(config)
     picam2.start()
     
-    # Force continuous Macro autofocus
-    picam2.set_controls({"AfMode": 2, "AfRange": 2})
+    # Force continuous autofocus, but RESTRICT the hardware metering window 
+    # to the exact center 40% of the screen so it ignores background clutter!
+    picam2.set_controls({
+        "AfMode": 2, 
+        "AfRange": 2,
+        "AfWindows": (0.3, 0.3, 0.4, 0.4) # x, y, width, height scale
+    })
 
     print("Invisi sorting machine online. Press CTRL+C to quit.")
 
