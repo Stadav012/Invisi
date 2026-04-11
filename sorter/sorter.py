@@ -147,6 +147,7 @@ def log_sorting_result(r, prediction, confidence, inference_ms, batch_id):
 
 
 def run():
+    global current_lens_pos
     gate, session, input_name = init_hardware()
     r = init_redis()
     batch_id = fetch_active_batch_id()
@@ -223,11 +224,9 @@ def run():
                     key = cv2.waitKey(1) & 0xFF
                     
                     if key == ord('w'):
-                        global current_lens_pos
                         current_lens_pos = min(25.0, current_lens_pos + 0.5)
                         picam2.set_controls({"LensPosition": current_lens_pos})
                     elif key == ord('s'):
-                        global current_lens_pos
                         current_lens_pos = max(0.0, current_lens_pos - 0.5)
                         picam2.set_controls({"LensPosition": current_lens_pos})
                 else:
@@ -255,11 +254,9 @@ def run():
                 if key == ord("q"):
                     break
                 elif key == ord('w'):
-                    global current_lens_pos
                     current_lens_pos = min(25.0, current_lens_pos + 0.5)
                     picam2.set_controls({"LensPosition": current_lens_pos})
                 elif key == ord('s'):
-                    global current_lens_pos
                     current_lens_pos = max(0.0, current_lens_pos - 0.5)
                     picam2.set_controls({"LensPosition": current_lens_pos})
     except KeyboardInterrupt:
