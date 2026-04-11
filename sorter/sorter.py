@@ -68,7 +68,7 @@ def fetch_active_batch_id():
 def init_hardware():
     """Initialize servo and AI model with throttled threads to prevent brownouts."""
     print("Initializing hardware...")
-    gate = AngularServo(SERVO_PIN, min_angle=-120, max_angle=120)
+    gate = AngularServo(SERVO_PIN, min_angle=-180, max_angle=180)
     gate.angle = 0
 
     options = ort.SessionOptions()
@@ -197,12 +197,12 @@ def run():
                 time.sleep(CONVEYOR_BELT_DELAY_S)
                 
                 if prediction == 0:
-                    gate.angle = -120
+                    gate.angle = -180
                     sorted_count["poor"] += 1
                     label = "POOR BEAN"
                     color = (0, 0, 255) # Red
                 else:
-                    gate.angle = 120
+                    gate.angle = 180
                     sorted_count["good"] += 1
                     label = "GOOD BEAN"
                     color = (0, 255, 0) # Green
