@@ -9,7 +9,7 @@ import numpy as np
 import onnxruntime as ort
 import redis
 import requests
-from gpiozero import AngularServo, LED
+from gpiozero import AngularServo
 from picamera2 import Picamera2
 
 MODEL_PATH = os.getenv("MODEL_PATH", "/home/invisi/Desktop/invisi_models/Trained_ResNet50_INT8.onnx")
@@ -63,13 +63,8 @@ def fetch_active_batch_id():
 def init_hardware():
     """Initialize servo and AI model with throttled threads to prevent brownouts."""
     print("Initializing hardware...")
-    
-    # TEMPORARY LED TESTING MODE
-    gate = LED(SERVO_PIN)
-    gate.off()
-    # (Original Servo Setup)
-    # gate = AngularServo(SERVO_PIN, min_angle=-90, max_angle=90)
-    # gate.angle = 0
+    gate = AngularServo(SERVO_PIN, min_angle=-90, max_angle=90)
+    gate.angle = 0
 
     options = ort.SessionOptions()
     options.intra_op_num_threads = 2
@@ -193,10 +188,10 @@ def run():
                 # We only log to Redis and fire Servo if a bean was actually detected
                 log_sorting_result(r, prediction, confidence, inference_ms, batch_id)
                 if prediction == 0:
-                    gate.off() # LED OFF for POOR
+                    gate.angle = -45
                     sorted_count["poor"] += 1
                 else:
-                    gate.on() # LED solid ON for GOOD
+                    gate.angle = 45
                     sorted_count["good"] += 1
             
             # 3. Screen Overlay Formatting
@@ -241,14 +236,14 @@ def run():
             
             if bbox_coords is not None:
                 time.sleep(SORT_DELAY_S)
-                gate.off()
+                gate.angle = 0
                 for _ in range(BUFFER_FLUSH_FRAMES):
                     picam2.capture_array()
 
     except KeyboardInterrupt:
         print("\nShutdown signal received (CTRL+C).")
     finally:
-        gate.close()
+        gate.detach()
         picam2.stop()
         if not HEADLESS_MODE:
             cv2.destroyAllWindows()
