@@ -209,7 +209,7 @@ def run():
                 time.sleep(CONVEYOR_BELT_DELAY_S)
                 
                 if prediction == 0:
-                    gate.angle = -180
+                    gate.angle = -5
                     sorted_count["poor"] += 1
                     label = "POOR BEAN"
                     color = (0, 0, 255) # Red
