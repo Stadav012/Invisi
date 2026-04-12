@@ -214,7 +214,7 @@ def run():
                     label = "POOR BEAN"
                     color = (0, 0, 255) # Red
                 else:
-                    gate.angle = 180
+                    gate.angle = 90
                     sorted_count["good"] += 1
                     label = "GOOD BEAN"
                     color = (0, 255, 0) # Green
