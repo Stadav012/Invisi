@@ -38,6 +38,13 @@ BUFFER_FLUSH_FRAMES = 5
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.65"))
 LABELS = {0: "POOR BEAN", 1: "GOOD BEAN"}
 
+# --- SMART SORT ALGORITHM ---
+VOTES_REQUIRED = int(os.getenv("VOTES_REQUIRED", "3"))        # frames needed before committing
+VOTE_WINDOW_S = float(os.getenv("VOTE_WINDOW_S", "2.0"))      # max time to collect votes for one bean
+MAX_CONSECUTIVE_POOR = int(os.getenv("MAX_CONSECUTIVE_POOR", "5"))  # pause & flag if exceeded
+DRIFT_WINDOW = int(os.getenv("DRIFT_WINDOW", "30"))           # rolling window for drift detection
+DRIFT_POOR_RATIO = float(os.getenv("DRIFT_POOR_RATIO", "0.9"))  # flag if poor% exceeds this
+
 # --- CAMERA ---
 EXPOSURE_TIME_US = int(os.getenv("EXPOSURE_TIME_US", "2000"))
 ANALOGUE_GAIN = float(os.getenv("ANALOGUE_GAIN", "4.0"))
@@ -189,6 +196,130 @@ def log_sorting_result(r, prediction, confidence, inference_ms, batch_id):
     r.zremrangebyscore(key, "-inf", cutoff)
 
 
+class SortController:
+    """Stateful sort algorithm: multi-frame voting, anomaly suppression, drift detection."""
+
+    def __init__(self):
+        self.votes = []           # list of (prediction, confidence) for the current bean
+        self.vote_start = 0.0
+        self.last_sort_time = 0.0
+        self.consecutive_poor = 0
+        self.paused = False
+        self.drift_warning = False
+        self.recent_results = []  # rolling window of final predictions
+
+        self.stats = {"good": 0, "poor": 0, "rejected": 0, "anomaly_pauses": 0}
+
+    @property
+    def in_cooldown(self):
+        return (time.time() - self.last_sort_time) < SORT_COOLDOWN_S
+
+    @property
+    def is_voting(self):
+        """True if we're in the middle of collecting frames for a bean."""
+        if not self.votes:
+            return False
+        return (time.time() - self.vote_start) < VOTE_WINDOW_S
+
+    def add_vote(self, prediction, confidence):
+        """Register one frame's classification for the current bean."""
+        if not self.votes:
+            self.vote_start = time.time()
+        self.votes.append((prediction, confidence))
+
+    def ready_to_commit(self):
+        """True when we have enough votes or the vote window expired."""
+        if len(self.votes) >= VOTES_REQUIRED:
+            return True
+        if self.votes and (time.time() - self.vote_start) >= VOTE_WINDOW_S:
+            return True
+        return False
+
+    def commit(self):
+        """Tally votes and return (prediction, avg_confidence, vote_count), or None if inconclusive."""
+        if not self.votes:
+            return None
+
+        num_votes = len(self.votes)
+        good_votes = [(p, c) for p, c in self.votes if p == 1]
+        poor_votes = [(p, c) for p, c in self.votes if p == 0]
+
+        if len(good_votes) > len(poor_votes):
+            winner = 1
+            avg_conf = np.mean([c for _, c in good_votes])
+        elif len(poor_votes) > len(good_votes):
+            winner = 0
+            avg_conf = np.mean([c for _, c in poor_votes])
+        else:
+            good_avg = np.mean([c for _, c in good_votes]) if good_votes else 0
+            poor_avg = np.mean([c for _, c in poor_votes]) if poor_votes else 0
+            winner = 1 if good_avg >= poor_avg else 0
+            avg_conf = max(good_avg, poor_avg)
+
+        self.votes = []
+
+        if avg_conf < CONFIDENCE_THRESHOLD:
+            self.stats["rejected"] += 1
+            return None
+
+        return winner, float(avg_conf), num_votes
+
+    def record_sort(self, prediction):
+        """Update state after a bean is physically sorted."""
+        self.last_sort_time = time.time()
+
+        if prediction == 0:
+            self.stats["poor"] += 1
+            self.consecutive_poor += 1
+        else:
+            self.stats["good"] += 1
+            self.consecutive_poor = 0
+
+        self.recent_results.append(prediction)
+        if len(self.recent_results) > DRIFT_WINDOW:
+            self.recent_results.pop(0)
+
+        self._check_anomaly()
+        self._check_drift()
+
+    def _check_anomaly(self):
+        """Pause if too many consecutive poor results (likely false positives)."""
+        if self.consecutive_poor >= MAX_CONSECUTIVE_POOR and not self.paused:
+            self.paused = True
+            self.stats["anomaly_pauses"] += 1
+            print(f"ANOMALY: {self.consecutive_poor} consecutive poor - pausing sort")
+
+    def _check_drift(self):
+        """Flag if poor ratio over the rolling window is abnormally high."""
+        if len(self.recent_results) < DRIFT_WINDOW:
+            self.drift_warning = False
+            return
+        poor_ratio = self.recent_results.count(0) / len(self.recent_results)
+        self.drift_warning = poor_ratio >= DRIFT_POOR_RATIO
+
+    def resume(self):
+        """Operator manually resumes after anomaly pause."""
+        self.paused = False
+        self.consecutive_poor = 0
+        self.votes = []
+
+    def reset_votes(self):
+        """Clear vote buffer when bean leaves the tripwire without enough votes."""
+        self.votes = []
+
+    @property
+    def status_text(self):
+        if self.paused:
+            return "PAUSED - anomaly detected, press 'r' to resume"
+        if self.drift_warning:
+            return "WARNING - abnormal poor ratio, check lighting/belt"
+        if self.is_voting:
+            return f"TRACKING BEAN - {len(self.votes)}/{VOTES_REQUIRED} votes"
+        if self.in_cooldown:
+            return "COOLDOWN - waiting for bean to clear"
+        return "EMPTY BELT - waiting"
+
+
 def _put_bold_text(frame, text, origin, scale, color, thickness=2):
     """Draw text with a dark outline so it's readable on any background."""
     x, y = origin
@@ -196,31 +327,37 @@ def _put_bold_text(frame, text, origin, scale, color, thickness=2):
     cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness)
 
 
-def _draw_stats(display_frame, sorted_count):
-    total = sorted_count["good"] + sorted_count["poor"]
-    stats = (f"Good: {sorted_count['good']}  Poor: {sorted_count['poor']}  "
-             f"Total: {total}  Rejected: {sorted_count['rejected']}")
-    _put_bold_text(display_frame, stats, (10, 70), 0.6, (255, 255, 255), 2)
+def _draw_stats(display_frame, ctrl):
+    s = ctrl.stats
+    total = s["good"] + s["poor"]
+    line1 = f"Good: {s['good']}  Poor: {s['poor']}  Total: {total}  Rej: {s['rejected']}"
+    _put_bold_text(display_frame, line1, (10, 70), 0.55, (255, 255, 255), 2)
+
+    if ctrl.drift_warning:
+        _put_bold_text(display_frame, "DRIFT WARNING", (10, 95), 0.55, (0, 165, 255), 2)
+    if ctrl.stats["anomaly_pauses"] > 0:
+        _put_bold_text(display_frame, f"Pauses: {ctrl.stats['anomaly_pauses']}",
+                       (400, 95), 0.45, (100, 100, 255), 1)
 
 
-def _show_sorted_frame(frame_rgb, bbox, label, confidence, inference_ms, sorted_count):
+def _show_sorted_frame(frame_rgb, bbox, label, confidence, inference_ms, ctrl, votes_used):
     display_frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
     x1, y1, x2, y2 = bbox
     color = (0, 0, 255) if "POOR" in label else (0, 255, 0)
 
     cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 3)
-    _put_bold_text(display_frame, f"{label} {confidence:.0%} ({inference_ms:.0f}ms)",
+    _put_bold_text(display_frame, f"{label} {confidence:.0%} [{votes_used}v]",
                    (10, 35), 1.0, color, 3)
-    _draw_stats(display_frame, sorted_count)
+    _draw_stats(display_frame, ctrl)
 
     if not HEADLESS_MODE:
         cv2.imshow("Invisi Vision Test", display_frame)
     else:
-        total = sorted_count["good"] + sorted_count["poor"]
-        print(f"{label} {confidence:.0%} | Good: {sorted_count['good']} Poor: {sorted_count['poor']} Total: {total}")
+        s = ctrl.stats
+        print(f"{label} {confidence:.0%} [{votes_used}v] | Good: {s['good']} Poor: {s['poor']}")
 
 
-def _show_idle_frame(frame_rgb, bbox, on_tripwire, in_cooldown, sorted_count):
+def _show_idle_frame(frame_rgb, bbox, on_tripwire, ctrl):
     display_frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
     cv2.line(display_frame, (0, TRIPWIRE_Y_MIN), (640, TRIPWIRE_Y_MIN), (0, 255, 255), 1)
@@ -231,18 +368,41 @@ def _show_idle_frame(frame_rgb, bbox, on_tripwire, in_cooldown, sorted_count):
         box_color = (255, 165, 0) if not on_tripwire else (255, 255, 0)
         cv2.rectangle(display_frame, (x1, y1), (x2, y2), box_color, 2)
 
-    if in_cooldown:
-        status = "COOLDOWN - waiting for bean to clear"
-    elif bbox is not None and not on_tripwire:
+    status = ctrl.status_text
+    if bbox is not None and not on_tripwire and not ctrl.paused and not ctrl.is_voting:
         status = "BEAN SEEN - not on tripwire yet"
-    else:
-        status = "EMPTY BELT - waiting"
 
-    _put_bold_text(display_frame, status, (10, 35), 0.8, (255, 255, 255), 2)
-    _draw_stats(display_frame, sorted_count)
+    status_color = (255, 255, 255)
+    if ctrl.paused:
+        status_color = (0, 0, 255)
+    elif ctrl.drift_warning:
+        status_color = (0, 165, 255)
+
+    _put_bold_text(display_frame, status, (10, 35), 0.8, status_color, 2)
+    _draw_stats(display_frame, ctrl)
 
     if not HEADLESS_MODE:
         cv2.imshow("Invisi Vision Test", display_frame)
+
+
+def _execute_sort(gate, ctrl, result, r, batch_id, frame_rgb, bbox, picam2):
+    """Physically sort the bean: actuate servo, log, update state."""
+    prediction, confidence, votes_used = result
+
+    log_sorting_result(r, prediction, confidence, 0, batch_id)
+    time.sleep(CONVEYOR_BELT_DELAY_S)
+
+    gate.angle = -5 if prediction == 0 else 90
+    ctrl.record_sort(prediction)
+
+    _show_sorted_frame(frame_rgb, bbox, LABELS[prediction], confidence, 0,
+                       ctrl, votes_used)
+
+    time.sleep(SORT_CLEARANCE_DELAY_S)
+    gate.angle = 0
+
+    for _ in range(BUFFER_FLUSH_FRAMES):
+        picam2.capture_array()
 
 
 def run():
@@ -268,69 +428,60 @@ def run():
         "AnalogueGain": ANALOGUE_GAIN,
     })
 
-    print("System Online. Press 'q' to quit.")
+    print("System Online. Press 'q' to quit, 'r' to resume after anomaly pause.")
 
-    sorted_count = {"good": 0, "poor": 0, "rejected": 0}
-    last_sort_time = 0.0
+    ctrl = SortController()
 
     try:
         while True:
             frame_rgb = picam2.capture_array()
-            now = time.time()
-            in_cooldown = (now - last_sort_time) < SORT_COOLDOWN_S
-
             bbox, contour = find_bean(frame_rgb)
 
-            # Tripwire gate: bean centroid must be in the vertical band
             on_tripwire = False
             if bbox is not None:
                 _, y1, _, y2 = bbox
                 center_y = (y1 + y2) / 2
                 on_tripwire = TRIPWIRE_Y_MIN <= center_y <= TRIPWIRE_Y_MAX
 
-            # --- CLASSIFY only when: real bean + on tripwire + not in cooldown ---
-            if bbox is not None and on_tripwire and not in_cooldown:
-                input_tensor = preprocess_roi(frame_rgb, bbox)
+            # Bean left the tripwire while we were collecting votes -> commit early
+            if ctrl.is_voting and (bbox is None or not on_tripwire):
+                if ctrl.ready_to_commit():
+                    result = ctrl.commit()
+                    if result is not None:
+                        _execute_sort(gate, ctrl, result, r, batch_id,
+                                      frame_rgb, bbox or (0, 0, 0, 0), picam2)
+                        continue
+                else:
+                    ctrl.reset_votes()
 
-                t0 = time.time()
+            # Collect votes when: bean on tripwire, not paused, not in cooldown
+            if bbox is not None and on_tripwire and not ctrl.paused and not ctrl.in_cooldown:
+                input_tensor = preprocess_roi(frame_rgb, bbox)
                 outputs = session.run(None, {input_name: input_tensor})
-                inference_ms = (time.time() - t0) * 1000
 
                 probs = softmax(outputs[0][0])
                 prediction = int(np.argmax(probs))
                 confidence = float(probs[prediction])
 
                 if confidence >= CONFIDENCE_THRESHOLD:
-                    log_sorting_result(r, prediction, confidence, inference_ms, batch_id)
-                    time.sleep(CONVEYOR_BELT_DELAY_S)
+                    ctrl.add_vote(prediction, confidence)
 
-                    if prediction == 0:
-                        gate.angle = -5
-                        sorted_count["poor"] += 1
-                    else:
-                        gate.angle = 90
-                        sorted_count["good"] += 1
+                if ctrl.ready_to_commit():
+                    result = ctrl.commit()
+                    if result is not None:
+                        _execute_sort(gate, ctrl, result, r, batch_id,
+                                      frame_rgb, bbox, picam2)
+                        continue
 
-                    label = LABELS[prediction]
-                    last_sort_time = time.time()
-
-                    _show_sorted_frame(frame_rgb, bbox, label, confidence,
-                                       inference_ms, sorted_count)
-
-                    time.sleep(SORT_CLEARANCE_DELAY_S)
-                    gate.angle = 0
-
-                    for _ in range(BUFFER_FLUSH_FRAMES):
-                        picam2.capture_array()
-                    continue
-                else:
-                    sorted_count["rejected"] += 1
-
-            _show_idle_frame(frame_rgb, bbox, on_tripwire, in_cooldown, sorted_count)
+            _show_idle_frame(frame_rgb, bbox, on_tripwire, ctrl)
 
             if not HEADLESS_MODE:
-                if cv2.waitKey(1) & 0xFF == ord('q'):
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
                     break
+                elif key == ord('r') and ctrl.paused:
+                    ctrl.resume()
+                    print("Resumed from anomaly pause")
 
     except KeyboardInterrupt:
         print("\nShutdown signal received (CTRL+C).")
