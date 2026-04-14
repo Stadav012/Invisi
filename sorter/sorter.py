@@ -56,8 +56,8 @@ IDLE_SLEEP_S = 0.01
 
 # --- Servo angles ---
 SERVO_NEUTRAL = float(os.getenv("SERVO_NEUTRAL", "0"))
-SERVO_GOOD = float(os.getenv("SERVO_GOOD", "90"))
-SERVO_POOR = float(os.getenv("SERVO_POOR", "-5"))
+SERVO_GOOD = float(os.getenv("SERVO_GOOD", "180"))
+SERVO_POOR = float(os.getenv("SERVO_POOR", "-180"))
 
 # --- Classification ---
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.65"))
