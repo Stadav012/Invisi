@@ -19,22 +19,34 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 POD_ID = os.getenv("POD_ID", "pod_01")
 
-CONTOUR_AREA_THRESHOLD = 1000
+# --- CONTOUR / BEAN DETECTION ---
+MIN_CONTOUR_AREA = int(os.getenv("MIN_CONTOUR_AREA", "2500"))
+MAX_CONTOUR_AREA = int(os.getenv("MAX_CONTOUR_AREA", "80000"))
+MIN_SOLIDITY = float(os.getenv("MIN_SOLIDITY", "0.5"))
+MIN_ASPECT_RATIO = 0.3
+MAX_ASPECT_RATIO = 3.5
 BEAN_PAD_PX = 15
-INPUT_SIZE = (224, 224)
 
-# --- TIMING TUNING ---
-# Time (in seconds) it takes the bean to travel from the camera lens to the physical gate
-CONVEYOR_BELT_DELAY_S = 0.25 
-SORT_CLEARANCE_DELAY_S = 0.5
-
+# --- TIMING ---
+CONVEYOR_BELT_DELAY_S = float(os.getenv("CONVEYOR_BELT_DELAY_S", "0.25"))
+SORT_CLEARANCE_DELAY_S = float(os.getenv("SORT_CLEARANCE_DELAY_S", "0.5"))
+SORT_COOLDOWN_S = float(os.getenv("SORT_COOLDOWN_S", "1.5"))
 BUFFER_FLUSH_FRAMES = 5
+
+# --- CLASSIFICATION ---
+CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.65"))
 LABELS = {0: "POOR BEAN", 1: "GOOD BEAN"}
+
+# --- CAMERA ---
+EXPOSURE_TIME_US = int(os.getenv("EXPOSURE_TIME_US", "2000"))
+ANALOGUE_GAIN = float(os.getenv("ANALOGUE_GAIN", "4.0"))
+
+# --- TRIPWIRE ZONE (Y pixel range on 480px frame) ---
+TRIPWIRE_Y_MIN = int(os.getenv("TRIPWIRE_Y_MIN", "160"))
+TRIPWIRE_Y_MAX = int(os.getenv("TRIPWIRE_Y_MAX", "320"))
 
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406])
 IMAGENET_STD = np.array([0.229, 0.224, 0.225])
-
-current_lens_pos = 10.0 # 10 diopters = Macro focus (10cm)
 HEADLESS_MODE = os.getenv("HEADLESS_MODE", "0") == "1"
 
 def init_redis():
@@ -84,48 +96,68 @@ def init_hardware():
     return gate, session, input_name
 
 
-def extract_and_preprocess(frame):
-    # Slice off the 4th Alpha channel if it exists
+def softmax(logits):
+    """Convert raw model logits to proper [0,1] probabilities."""
+    exp = np.exp(logits - np.max(logits))
+    return exp / exp.sum()
+
+
+def is_bean_contour(contour):
+    """Reject shadows, belt edges, and noise — only accept bean-shaped blobs."""
+    area = cv2.contourArea(contour)
+    if area < MIN_CONTOUR_AREA or area > MAX_CONTOUR_AREA:
+        return False
+
+    x, y, w, h = cv2.boundingRect(contour)
+    aspect = w / h if h > 0 else 0
+    if aspect < MIN_ASPECT_RATIO or aspect > MAX_ASPECT_RATIO:
+        return False
+
+    hull_area = cv2.contourArea(cv2.convexHull(contour))
+    solidity = area / hull_area if hull_area > 0 else 0
+    if solidity < MIN_SOLIDITY:
+        return False
+
+    return True
+
+
+def find_bean(frame):
+    """Detect the single best bean-shaped contour in frame. Returns (bbox, contour) or (None, None)."""
     if frame.shape[-1] == 4:
-        frame = frame[:, :, :3] 
-        
-    # --- DYNAMIC ROI EXTRACTION ---
+        frame = frame[:, :, :3]
+
     gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
     blurred = cv2.GaussianBlur(gray, (7, 7), 0)
     _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    bbox_coords = None
-    cropped_frame = frame.copy() # Default to full frame if nothing is found
-    
-    if contours:
-        largest_contour = max(contours, key=cv2.contourArea)
-        
-        # Only crop if the dark object is large enough
-        if cv2.contourArea(largest_contour) > 1000:
-            x, y, w, h = cv2.boundingRect(largest_contour)
-            
-            # Add a 15-pixel padding around the bean
-            pad = 15
-            x1 = max(0, x - pad)
-            y1 = max(0, y - pad)
-            x2 = min(frame.shape[1], x + w + pad)
-            y2 = min(frame.shape[0], y + h + pad)
-            
-            # Crop the frame and save the coordinates to draw the box later
-            cropped_frame = frame[y1:y2, x1:x2]
-            bbox_coords = (x1, y1, x2, y2)
 
-    # --- STANDARD AI PREPROCESSING ---
-    img = cv2.resize(cropped_frame, (224, 224))
-    img = img.astype(np.float32) / 255.0
-    mean = np.array([0.485, 0.456, 0.406])
-    std = np.array([0.229, 0.224, 0.225])
-    img = (img - mean) / std
+    bean_contours = [c for c in contours if is_bean_contour(c)]
+    if not bean_contours:
+        return None, None
+
+    best = max(bean_contours, key=cv2.contourArea)
+    x, y, w, h = cv2.boundingRect(best)
+    pad = BEAN_PAD_PX
+    x1 = max(0, x - pad)
+    y1 = max(0, y - pad)
+    x2 = min(frame.shape[1], x + w + pad)
+    y2 = min(frame.shape[0], y + h + pad)
+
+    return (x1, y1, x2, y2), best
+
+
+def preprocess_roi(frame, bbox):
+    """Crop ROI from frame and prepare the model input tensor."""
+    if frame.shape[-1] == 4:
+        frame = frame[:, :, :3]
+
+    x1, y1, x2, y2 = bbox
+    cropped = frame[y1:y2, x1:x2]
+
+    img = cv2.resize(cropped, (224, 224)).astype(np.float32) / 255.0
+    img = (img - IMAGENET_MEAN) / IMAGENET_STD
     img = np.transpose(img, (2, 0, 1))
-    
-    # We now return BOTH the AI tensor and the box coordinates
-    return np.expand_dims(img, axis=0).astype(np.float32), bbox_coords
+    return np.expand_dims(img, axis=0).astype(np.float32)
 
 
 def log_sorting_result(r, prediction, confidence, inference_ms, batch_id):
@@ -148,6 +180,57 @@ def log_sorting_result(r, prediction, confidence, inference_ms, batch_id):
     r.zremrangebyscore(key, "-inf", cutoff)
 
 
+def _draw_stats(display_frame, sorted_count):
+    total = sorted_count["good"] + sorted_count["poor"]
+    stats = (f"Good: {sorted_count['good']} | Poor: {sorted_count['poor']} "
+             f"| Total: {total} | Rejected: {sorted_count['rejected']}")
+    cv2.putText(display_frame, stats, (10, 65),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+
+
+def _show_sorted_frame(frame_rgb, bbox, label, confidence, inference_ms, sorted_count):
+    display_frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+    x1, y1, x2, y2 = bbox
+    color = (0, 0, 255) if "POOR" in label else (0, 255, 0)
+
+    cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
+    cv2.putText(display_frame, f"{label} {confidence:.0%} ({inference_ms:.0f}ms)",
+                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+    _draw_stats(display_frame, sorted_count)
+
+    if not HEADLESS_MODE:
+        cv2.imshow("Invisi Vision Test", display_frame)
+    else:
+        total = sorted_count["good"] + sorted_count["poor"]
+        print(f"{label} {confidence:.0%} | Good: {sorted_count['good']} Poor: {sorted_count['poor']} Total: {total}")
+
+
+def _show_idle_frame(frame_rgb, bbox, on_tripwire, in_cooldown, sorted_count):
+    display_frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+
+    cv2.line(display_frame, (0, TRIPWIRE_Y_MIN), (640, TRIPWIRE_Y_MIN), (0, 255, 255), 1)
+    cv2.line(display_frame, (0, TRIPWIRE_Y_MAX), (640, TRIPWIRE_Y_MAX), (0, 255, 255), 1)
+
+    if bbox is not None:
+        x1, y1, x2, y2 = bbox
+        box_color = (255, 165, 0) if not on_tripwire else (255, 255, 0)
+        cv2.rectangle(display_frame, (x1, y1), (x2, y2), box_color, 1)
+
+    if in_cooldown:
+        status = "COOLDOWN — waiting for bean to clear"
+    elif bbox is not None and not on_tripwire:
+        status = "BEAN DETECTED — not on tripwire yet"
+    else:
+        status = "EMPTY BELT — waiting"
+
+    cv2.putText(display_frame, status, (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    _draw_stats(display_frame, sorted_count)
+
+    if not HEADLESS_MODE:
+        cv2.imshow("Invisi Vision Test", display_frame)
+
+
 def run():
     gate, session, input_name = init_hardware()
     r = init_redis()
@@ -164,113 +247,76 @@ def run():
     picam2.configure(config)
     picam2.start()
     
-    # Force continuous Macro autofocus
-    picam2.set_controls({"AfMode": 2, "AfRange": 2})
+    picam2.set_controls({
+        "AfMode": 2,
+        "AfRange": 2,
+        "ExposureTime": EXPOSURE_TIME_US,
+        "AnalogueGain": ANALOGUE_GAIN,
+    })
 
-    print("System Online. Show cocoa beans to the camera. Press 'q' to quit.")
+    print("System Online. Press 'q' to quit.")
 
-    sorted_count = {"good": 0, "poor": 0}
+    sorted_count = {"good": 0, "poor": 0, "rejected": 0}
+    last_sort_time = 0.0
 
     try:
         while True:
-            # Capture raw frame
             frame_rgb = picam2.capture_array()
-            
-            # 1. Preprocess the frame and get the bounding box coordinates
-            input_tensor, bbox_coords = extract_and_preprocess(frame_rgb)
-            
-            # --- VIRTUAL TRIPWIRE LOGIC ---
-            # To prevent the AI from making erratic predictions on half-visible beans entering 
-            # the edge of the frame, we force the AI to ignore the bean until it rolls perfectly 
-            # over the center horizontal 'tripwire' of the camera view.
-            if bbox_coords is not None:
-                _, y1, _, y2 = bbox_coords
-                bean_center_y = (y1 + y2) / 2
-                
-                # If bean centroid is not in the exact center 'kill zone' (y=220 to 260), ignore it!
-                if bean_center_y < 200 or bean_center_y > 280:
-                    bbox_coords = None
+            now = time.time()
+            in_cooldown = (now - last_sort_time) < SORT_COOLDOWN_S
 
-            # 2. Run Inference ONLY if the bean is directly on the tripwire!
-            if bbox_coords is not None:
-                start_time = time.time()
+            bbox, contour = find_bean(frame_rgb)
+
+            # Tripwire gate: bean centroid must be in the vertical band
+            on_tripwire = False
+            if bbox is not None:
+                _, y1, _, y2 = bbox
+                center_y = (y1 + y2) / 2
+                on_tripwire = TRIPWIRE_Y_MIN <= center_y <= TRIPWIRE_Y_MAX
+
+            # --- CLASSIFY only when: real bean + on tripwire + not in cooldown ---
+            if bbox is not None and on_tripwire and not in_cooldown:
+                input_tensor = preprocess_roi(frame_rgb, bbox)
+
+                t0 = time.time()
                 outputs = session.run(None, {input_name: input_tensor})
-                inference_ms = (time.time() - start_time) * 1000
-                
-                probabilities = outputs[0][0]
-                prediction = np.argmax(probabilities)
-                confidence = float(np.max(probabilities))
-                
-                # We only log to Redis and fire Servo since a bean was actually detected
-                log_sorting_result(r, prediction, confidence, inference_ms, batch_id)
-                
-                # --- SYNCHRONIZATION DELAY ---
-                # Wait for the moving conveyor belt to carry the bean to the gate
-                time.sleep(CONVEYOR_BELT_DELAY_S)
-                
-                if prediction == 0:
-                    gate.angle = -5
-                    sorted_count["poor"] += 1
-                    label = "POOR BEAN"
-                    color = (0, 0, 255) # Red
+                inference_ms = (time.time() - t0) * 1000
+
+                probs = softmax(outputs[0][0])
+                prediction = int(np.argmax(probs))
+                confidence = float(probs[prediction])
+
+                if confidence >= CONFIDENCE_THRESHOLD:
+                    log_sorting_result(r, prediction, confidence, inference_ms, batch_id)
+                    time.sleep(CONVEYOR_BELT_DELAY_S)
+
+                    if prediction == 0:
+                        gate.angle = -5
+                        sorted_count["poor"] += 1
+                    else:
+                        gate.angle = 90
+                        sorted_count["good"] += 1
+
+                    label = LABELS[prediction]
+                    last_sort_time = time.time()
+
+                    _show_sorted_frame(frame_rgb, bbox, label, confidence,
+                                       inference_ms, sorted_count)
+
+                    time.sleep(SORT_CLEARANCE_DELAY_S)
+                    gate.angle = 0
+
+                    for _ in range(BUFFER_FLUSH_FRAMES):
+                        picam2.capture_array()
+                    continue
                 else:
-                    gate.angle = 90
-                    sorted_count["good"] += 1
-                    label = "GOOD BEAN"
-                    color = (0, 255, 0) # Green
-                
-                # 3. Screen Overlay Formatting
-                display_frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                    sorted_count["rejected"] += 1
 
-                x1, y1, x2, y2 = bbox_coords
-                cv2.rectangle(display_frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                cv2.putText(display_frame, "Target ROI", (x1, y1 - 10), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+            _show_idle_frame(frame_rgb, bbox, on_tripwire, in_cooldown, sorted_count)
 
-                cv2.putText(display_frame, f"{label} ({inference_ms:.1f}ms)", (10, 30), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-                
-                total = sorted_count["good"] + sorted_count["poor"]
-                status_line = f"Good: {sorted_count['good']} | Poor: {sorted_count['poor']} | Total: {total}"
-                cv2.putText(
-                    display_frame, status_line,
-                    (10, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1,
-                )
-
-                if not HEADLESS_MODE:
-                    cv2.imshow("Invisi Vision Test", display_frame)
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        break
-                else:
-                    print(status_line)
-                
-                # Wait for bean to physically clear the gate before resetting
-                time.sleep(SORT_CLEARANCE_DELAY_S)
-                gate.angle = 0
-                for _ in range(BUFFER_FLUSH_FRAMES):
-                    picam2.capture_array()
-            
-            else:
-                # NO BEAN DETECTED ON THE TRIPWIRE. Ignore everything!
-                display_frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-                
-                # Draw the Virtual Tripwire in yellow for visual calibration
-                cv2.line(display_frame, (0, 200), (640, 200), (0, 255, 255), 1)
-                cv2.line(display_frame, (0, 280), (640, 280), (0, 255, 255), 1)
-                
-                cv2.putText(display_frame, "EMPTY BELT - WAITING FOR TRIPWIRE", (10, 30), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                
-                total = sorted_count["good"] + sorted_count["poor"]
-                cv2.putText(
-                    display_frame, f"Good: {sorted_count['good']} | Poor: {sorted_count['poor']} | Total: {total}",
-                    (10, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1,
-                )
-                
-                if not HEADLESS_MODE:
-                    cv2.imshow("Invisi Vision Test", display_frame)
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        break
+            if not HEADLESS_MODE:
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
 
     except KeyboardInterrupt:
         print("\nShutdown signal received (CTRL+C).")
