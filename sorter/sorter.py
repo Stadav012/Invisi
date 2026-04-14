@@ -64,7 +64,7 @@ CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.65"))
 LABELS = {0: "POOR BEAN", 1: "GOOD BEAN"}
 
 # --- Smart sort algorithm ---
-VOTES_REQUIRED = int(os.getenv("VOTES_REQUIRED", "3"))
+VOTES_REQUIRED = int(os.getenv("VOTES_REQUIRED", "1"))
 VOTE_WINDOW_S = float(os.getenv("VOTE_WINDOW_S", "2.0"))
 MAX_CONSECUTIVE_POOR = int(os.getenv("MAX_CONSECUTIVE_POOR", "5"))
 DRIFT_WINDOW = int(os.getenv("DRIFT_WINDOW", "30"))
