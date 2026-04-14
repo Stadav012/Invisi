@@ -25,6 +25,7 @@ MAX_CONTOUR_AREA = int(os.getenv("MAX_CONTOUR_AREA", "80000"))
 MIN_SOLIDITY = float(os.getenv("MIN_SOLIDITY", "0.5"))
 MIN_ASPECT_RATIO = 0.3
 MAX_ASPECT_RATIO = 3.5
+EDGE_MARGIN_PX = 25  # reject contours this close to the frame border (machinery, not beans)
 BEAN_PAD_PX = 15
 
 # --- TIMING ---
@@ -102,13 +103,20 @@ def softmax(logits):
     return exp / exp.sum()
 
 
-def is_bean_contour(contour):
-    """Reject shadows, belt edges, and noise — only accept bean-shaped blobs."""
+def is_bean_contour(contour, frame_w, frame_h):
+    """Reject shadows, belt edges, machinery, and noise."""
     area = cv2.contourArea(contour)
     if area < MIN_CONTOUR_AREA or area > MAX_CONTOUR_AREA:
         return False
 
     x, y, w, h = cv2.boundingRect(contour)
+
+    # Anything touching the frame border is machinery/structure, not a bean
+    if (x <= EDGE_MARGIN_PX or y <= EDGE_MARGIN_PX
+            or (x + w) >= (frame_w - EDGE_MARGIN_PX)
+            or (y + h) >= (frame_h - EDGE_MARGIN_PX)):
+        return False
+
     aspect = w / h if h > 0 else 0
     if aspect < MIN_ASPECT_RATIO or aspect > MAX_ASPECT_RATIO:
         return False
@@ -126,12 +134,13 @@ def find_bean(frame):
     if frame.shape[-1] == 4:
         frame = frame[:, :, :3]
 
+    frame_h, frame_w = frame.shape[:2]
     gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
     blurred = cv2.GaussianBlur(gray, (7, 7), 0)
     _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    bean_contours = [c for c in contours if is_bean_contour(c)]
+    bean_contours = [c for c in contours if is_bean_contour(c, frame_w, frame_h)]
     if not bean_contours:
         return None, None
 
@@ -180,12 +189,18 @@ def log_sorting_result(r, prediction, confidence, inference_ms, batch_id):
     r.zremrangebyscore(key, "-inf", cutoff)
 
 
+def _put_bold_text(frame, text, origin, scale, color, thickness=2):
+    """Draw text with a dark outline so it's readable on any background."""
+    x, y = origin
+    cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), thickness + 3)
+    cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness)
+
+
 def _draw_stats(display_frame, sorted_count):
     total = sorted_count["good"] + sorted_count["poor"]
-    stats = (f"Good: {sorted_count['good']} | Poor: {sorted_count['poor']} "
-             f"| Total: {total} | Rejected: {sorted_count['rejected']}")
-    cv2.putText(display_frame, stats, (10, 65),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+    stats = (f"Good: {sorted_count['good']}  Poor: {sorted_count['poor']}  "
+             f"Total: {total}  Rejected: {sorted_count['rejected']}")
+    _put_bold_text(display_frame, stats, (10, 70), 0.6, (255, 255, 255), 2)
 
 
 def _show_sorted_frame(frame_rgb, bbox, label, confidence, inference_ms, sorted_count):
@@ -193,9 +208,9 @@ def _show_sorted_frame(frame_rgb, bbox, label, confidence, inference_ms, sorted_
     x1, y1, x2, y2 = bbox
     color = (0, 0, 255) if "POOR" in label else (0, 255, 0)
 
-    cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
-    cv2.putText(display_frame, f"{label} {confidence:.0%} ({inference_ms:.0f}ms)",
-                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+    cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 3)
+    _put_bold_text(display_frame, f"{label} {confidence:.0%} ({inference_ms:.0f}ms)",
+                   (10, 35), 1.0, color, 3)
     _draw_stats(display_frame, sorted_count)
 
     if not HEADLESS_MODE:
@@ -214,17 +229,16 @@ def _show_idle_frame(frame_rgb, bbox, on_tripwire, in_cooldown, sorted_count):
     if bbox is not None:
         x1, y1, x2, y2 = bbox
         box_color = (255, 165, 0) if not on_tripwire else (255, 255, 0)
-        cv2.rectangle(display_frame, (x1, y1), (x2, y2), box_color, 1)
+        cv2.rectangle(display_frame, (x1, y1), (x2, y2), box_color, 2)
 
     if in_cooldown:
-        status = "COOLDOWN — waiting for bean to clear"
+        status = "COOLDOWN - waiting for bean to clear"
     elif bbox is not None and not on_tripwire:
-        status = "BEAN DETECTED — not on tripwire yet"
+        status = "BEAN SEEN - not on tripwire yet"
     else:
-        status = "EMPTY BELT — waiting"
+        status = "EMPTY BELT - waiting"
 
-    cv2.putText(display_frame, status, (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    _put_bold_text(display_frame, status, (10, 35), 0.8, (255, 255, 255), 2)
     _draw_stats(display_frame, sorted_count)
 
     if not HEADLESS_MODE:
