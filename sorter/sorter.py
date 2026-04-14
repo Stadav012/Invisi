@@ -77,8 +77,8 @@ ANALOGUE_GAIN = float(os.getenv("ANALOGUE_GAIN", "4.0"))
 CAMERA_WARMUP_FRAMES = 15
 
 # --- Tripwire zone (Y pixel range) ---
-TRIPWIRE_Y_MIN = int(os.getenv("TRIPWIRE_Y_MIN", "160"))
-TRIPWIRE_Y_MAX = int(os.getenv("TRIPWIRE_Y_MAX", "320"))
+TRIPWIRE_Y_MIN = int(os.getenv("TRIPWIRE_Y_MIN", "120"))
+TRIPWIRE_Y_MAX = int(os.getenv("TRIPWIRE_Y_MAX", "380"))
 
 # --- Batch refresh ---
 BATCH_REFRESH_INTERVAL_S = 60
@@ -230,6 +230,22 @@ def is_bean_contour(contour, frame_w, frame_h):
     return True
 
 
+def _find_bean_contours(blurred, frame_w, frame_h):
+    """Try adaptive thresholding first, fall back to Otsu if nothing found."""
+    adaptive = cv2.adaptiveThreshold(
+        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV, ADAPTIVE_BLOCK_SIZE, ADAPTIVE_C,
+    )
+    contours, _ = cv2.findContours(adaptive, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    beans = [c for c in contours if is_bean_contour(c, frame_w, frame_h)]
+    if beans:
+        return beans
+
+    _, otsu = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    contours, _ = cv2.findContours(otsu, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    return [c for c in contours if is_bean_contour(c, frame_w, frame_h)]
+
+
 def find_bean(frame):
     """Detect the best bean-shaped contour. Returns (bbox, centroid) or (None, None)."""
     if frame.shape[-1] == 4:
@@ -239,14 +255,7 @@ def find_bean(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
     blurred = cv2.GaussianBlur(gray, (7, 7), 0)
 
-    thresh = cv2.adaptiveThreshold(
-        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV, ADAPTIVE_BLOCK_SIZE, ADAPTIVE_C,
-    )
-
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    bean_contours = [c for c in contours if is_bean_contour(c, frame_w, frame_h)]
+    bean_contours = _find_bean_contours(blurred, frame_w, frame_h)
     if not bean_contours:
         return None, None
 
