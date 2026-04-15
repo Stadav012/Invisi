@@ -1,12 +1,10 @@
 /*
   Invisi Conveyor — Serial slave mode
-  Listens for single-char commands from the Pi over USB serial:
-    'F' = run belt forward
+  Commands from the Pi over USB serial:
+    'N' = nudge — short pulse at full duty, then auto-stop (for scanning)
+    'F' = run forward continuously
     'S' = stop belt
-    'C' = short clearance pulse (push bean past gate, then auto-stop)
-
-  Responds with 'OK\n' after executing each command.
-  The Pi decides when to stop/start based on camera vision.
+    'C' = clearance pulse — push bean past sort gate, then auto-stop
 */
 
 #define RPWM 5
@@ -14,21 +12,16 @@
 #define REN  8
 #define LEN  9
 
-const int dutyCycle = 60;
-const int clearancePulseMs = 1600;  // time to push bean past the gate
+const int duty = 67;
 
-void runMotor() {
-  analogWrite(RPWM, dutyCycle);
-  analogWrite(LPWM, 0);
-}
+// How far the belt moves per nudge. Start at 150ms; increase if
+// beans aren't entering the frame, decrease if they're overshooting.
+const int nudgeMs = 150;
 
-void stopMotor() {
-  analogWrite(RPWM, 0);
-  analogWrite(LPWM, 0);
-}
+const int clearancePulseMs = 1600;
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
   pinMode(RPWM, OUTPUT);
   pinMode(LPWM, OUTPUT);
   pinMode(LEN,  OUTPUT);
@@ -36,7 +29,8 @@ void setup() {
   digitalWrite(REN, HIGH);
   digitalWrite(LEN, HIGH);
 
-  stopMotor();
+  analogWrite(RPWM, 0);
+  analogWrite(LPWM, 0);
   Serial.println("READY");
 }
 
@@ -46,20 +40,33 @@ void loop() {
   char cmd = Serial.read();
 
   switch (cmd) {
+    case 'N':
+      analogWrite(RPWM, duty);
+      analogWrite(LPWM, 0);
+      delay(nudgeMs);
+      analogWrite(RPWM, 0);
+      analogWrite(LPWM, 0);
+      Serial.println("OK");
+      break;
+
     case 'F':
-      runMotor();
+      analogWrite(RPWM, duty);
+      analogWrite(LPWM, 0);
       Serial.println("OK");
       break;
 
     case 'S':
-      stopMotor();
+      analogWrite(RPWM, 0);
+      analogWrite(LPWM, 0);
       Serial.println("OK");
       break;
 
     case 'C':
-      runMotor();
+      analogWrite(RPWM, duty);
+      analogWrite(LPWM, 0);
       delay(clearancePulseMs);
-      stopMotor();
+      analogWrite(RPWM, 0);
+      analogWrite(LPWM, 0);
       Serial.println("OK");
       break;
   }

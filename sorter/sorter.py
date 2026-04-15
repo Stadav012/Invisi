@@ -85,8 +85,8 @@ TRIPWIRE_Y_MIN = int(os.getenv("TRIPWIRE_Y_MIN", "120"))
 TRIPWIRE_Y_MAX = int(os.getenv("TRIPWIRE_Y_MAX", "380"))
 
 # --- Belt serial control ---
-BELT_SERIAL_PORT = os.getenv("BELT_SERIAL_PORT", "/dev/ttyUSB0")
-BELT_BAUD_RATE = int(os.getenv("BELT_BAUD_RATE", "9600"))
+BELT_SERIAL_PORT = os.getenv("BELT_SERIAL_PORT", "/dev/ttyACM0")
+BELT_BAUD_RATE = int(os.getenv("BELT_BAUD_RATE", "115200"))
 BELT_SETTLE_S = float(os.getenv("BELT_SETTLE_S", "0.3"))
 
 # --- Batch refresh ---
@@ -234,6 +234,10 @@ class BeltController:
 
     def stop(self):
         self._send("S")
+
+    def nudge(self):
+        """Short pulse at full duty, then auto-stops. Belt moves ~1-2 cm."""
+        self._send("N")
 
     def clearance_pulse(self):
         """Short forward pulse to push bean past the gate, then auto-stops."""
@@ -754,11 +758,11 @@ def _run_belt_mode(gate, session, input_name, r, belt, picam2, ctrl, batch_id, l
                 logger.info(f"Batch ID refreshed: {batch_id}")
             last_batch_refresh = now
 
-        # Step 1: Run belt and watch for a bean to appear
-        belt.forward()
+        # Step 1: Nudge-and-check — pulse belt in short hops, check camera after each
         bean_found = False
 
         while not _shutdown_requested and not bean_found:
+            # Check camera BEFORE nudging (bean may already be in frame)
             frame_rgb = picam2.capture_array()
 
             brightness = frame_brightness(frame_rgb)
@@ -771,22 +775,25 @@ def _run_belt_mode(gate, session, input_name, r, belt, picam2, ctrl, batch_id, l
 
             _show_idle_frame(frame_rgb, bbox, on_tripwire, ctrl)
 
-            if on_tripwire and not ctrl.low_light:
+            if bbox is not None and not ctrl.low_light:
                 bean_found = True
+                break
 
             if _check_quit():
                 return
 
-            time.sleep(IDLE_SLEEP_S)
+            # No bean visible — nudge the belt one hop forward, then re-check
+            belt.nudge()
+            time.sleep(BELT_SETTLE_S)
 
         if _shutdown_requested:
             break
 
-        # Step 2: Bean detected on tripwire — stop belt, let it settle
-        belt.stop()
+        # Step 2: Bean visible and belt already stopped (nudge auto-stops)
         time.sleep(BELT_SETTLE_S)
 
-        # Step 3: Classify the stationary bean (sharp, no blur)
+        # Step 3: Classify the stationary bean
+        # The bean may have stopped before or on the tripwire — either is fine
         result, frame_rgb, bbox, centroid = _classify_stationary_bean(
             session, input_name, picam2, ctrl)
 
