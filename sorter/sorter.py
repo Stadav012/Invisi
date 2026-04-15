@@ -75,9 +75,9 @@ CENTROID_JUMP_PX = float(os.getenv("CENTROID_JUMP_PX", "50"))
 EXPOSURE_TIME_US = int(os.getenv("EXPOSURE_TIME_US", "2000"))
 ANALOGUE_GAIN = float(os.getenv("ANALOGUE_GAIN", "4.0"))
 CAMERA_WARMUP_FRAMES = 15
-# Lens position in diopters: higher = closer focus. 10.0 ~ 10cm macro.
-# Set to 0 to use one-shot autofocus at startup then lock.
-MANUAL_LENS_POSITION = float(os.getenv("MANUAL_LENS_POSITION", "0"))
+# Lens position in diopters: higher = closer focus. Formula: 100 / distance_cm.
+# At 5.5cm you need ~18, but IMX708 max is ~15. Set as high as the lens allows.
+MANUAL_LENS_POSITION = float(os.getenv("MANUAL_LENS_POSITION", "15.0"))
 
 # --- Tripwire zone (Y pixel range) ---
 TRIPWIRE_Y_MIN = int(os.getenv("TRIPWIRE_Y_MIN", "120"))
