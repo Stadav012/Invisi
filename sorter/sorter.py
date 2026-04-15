@@ -12,6 +12,7 @@ import numpy as np
 import onnxruntime as ort
 import redis
 import requests
+import serial
 from gpiozero import AngularServo
 from picamera2 import Picamera2
 
@@ -82,6 +83,11 @@ MANUAL_LENS_POSITION = float(os.getenv("MANUAL_LENS_POSITION", "15.0"))
 # --- Tripwire zone (Y pixel range) ---
 TRIPWIRE_Y_MIN = int(os.getenv("TRIPWIRE_Y_MIN", "120"))
 TRIPWIRE_Y_MAX = int(os.getenv("TRIPWIRE_Y_MAX", "380"))
+
+# --- Belt serial control ---
+BELT_SERIAL_PORT = os.getenv("BELT_SERIAL_PORT", "/dev/ttyUSB0")
+BELT_BAUD_RATE = int(os.getenv("BELT_BAUD_RATE", "9600"))
+BELT_SETTLE_S = float(os.getenv("BELT_SETTLE_S", "0.3"))
 
 # --- Batch refresh ---
 BATCH_REFRESH_INTERVAL_S = 60
@@ -187,6 +193,51 @@ def init_hardware():
     input_name = session.get_inputs()[0].name
 
     return gate, session, input_name
+
+
+# ---------------------------------------------------------------------------
+# Belt control
+# ---------------------------------------------------------------------------
+
+
+class BeltController:
+    """Serial interface to the Arduino conveyor motor."""
+
+    def __init__(self):
+        self.conn = None
+        try:
+            self.conn = serial.Serial(BELT_SERIAL_PORT, BELT_BAUD_RATE, timeout=2)
+            time.sleep(2)  # Arduino resets on serial connect
+            startup = self.conn.readline().decode().strip()
+            logger.info(f"Belt connected: {startup}")
+        except Exception as e:
+            logger.warning(f"Belt serial unavailable ({BELT_SERIAL_PORT}): {e}")
+            logger.warning("Running in camera-only mode (no belt control)")
+
+    @property
+    def available(self):
+        return self.conn is not None
+
+    def _send(self, cmd):
+        if not self.available:
+            return
+        try:
+            self.conn.write(cmd.encode())
+            resp = self.conn.readline().decode().strip()
+            if resp != "OK":
+                logger.warning(f"Belt unexpected response to '{cmd}': {resp}")
+        except Exception as e:
+            logger.warning(f"Belt serial error: {e}")
+
+    def forward(self):
+        self._send("F")
+
+    def stop(self):
+        self._send("S")
+
+    def clearance_pulse(self):
+        """Short forward pulse to push bean past the gate, then auto-stops."""
+        self._send("C")
 
 
 # ---------------------------------------------------------------------------
@@ -534,20 +585,25 @@ def _show_idle_frame(frame_rgb, bbox, on_tripwire, ctrl):
 # ---------------------------------------------------------------------------
 
 
-def _execute_sort(gate, ctrl, result, r, batch_id, frame_rgb, bbox, centroid, picam2):
-    """Physically sort the bean: actuate servo, log, update state."""
+def _execute_sort(gate, ctrl, result, r, batch_id, frame_rgb, bbox, centroid, picam2, belt):
+    """Physically sort the bean: actuate servo, push bean through, update state."""
     prediction, confidence, votes_used, avg_inference_ms = result
 
     log_sorting_result(r, prediction, confidence, avg_inference_ms, batch_id, votes_used)
-    time.sleep(CONVEYOR_BELT_DELAY_S)
 
     gate.angle = SERVO_POOR if prediction == 0 else SERVO_GOOD
+    time.sleep(CONVEYOR_BELT_DELAY_S)
+
     ctrl.record_sort(prediction, centroid)
 
     _show_sorted_frame(frame_rgb, bbox, LABELS[prediction], confidence,
                        avg_inference_ms, ctrl, votes_used)
 
-    time.sleep(SORT_CLEARANCE_DELAY_S)
+    if belt.available:
+        belt.clearance_pulse()
+    else:
+        time.sleep(SORT_CLEARANCE_DELAY_S)
+
     gate.angle = SERVO_NEUTRAL
 
     for _ in range(BUFFER_FLUSH_FRAMES):
@@ -559,19 +615,7 @@ def _execute_sort(gate, ctrl, result, r, batch_id, frame_rgb, bbox, centroid, pi
 # ---------------------------------------------------------------------------
 
 
-def run():
-    global _shutdown_requested
-
-    gate, session, input_name = init_hardware()
-    r = init_redis()
-    batch_id = fetch_active_batch_id()
-    last_batch_refresh = time.time()
-
-    if batch_id:
-        logger.info(f"Active batch: {batch_id}")
-    else:
-        logger.info("No active batch found. Results will be buffered without batch_id.")
-
+def _init_camera():
     logger.info("Initializing camera")
     picam2 = Picamera2()
     config = picam2.create_video_configuration(main={"size": (640, 480)})
@@ -597,97 +641,79 @@ def run():
         picam2.capture_array()
     time.sleep(0.5)
 
-    logger.info("System online. Press 'q' to quit, 'r' to resume after anomaly pause.")
+    return picam2
 
+
+def _check_quit():
+    """Returns True if user pressed 'q'."""
+    if HEADLESS_MODE:
+        return False
+    return (cv2.waitKey(1) & 0xFF) == ord('q')
+
+
+def _classify_stationary_bean(session, input_name, picam2, ctrl):
+    """Capture multiple frames of a stopped bean and vote. Returns (result, frame, bbox, centroid) or Nones."""
+    for _ in range(VOTES_REQUIRED + 2):
+        frame_rgb = picam2.capture_array()
+
+        brightness = frame_brightness(frame_rgb)
+        if brightness < MIN_BRIGHTNESS:
+            continue
+
+        bbox, centroid = find_bean(frame_rgb)
+        if bbox is None:
+            continue
+
+        input_tensor = preprocess_roi(frame_rgb, bbox)
+        t0 = time.time()
+        outputs = session.run(None, {input_name: input_tensor})
+        inference_ms = (time.time() - t0) * 1000
+
+        probs = softmax(outputs[0][0])
+        prediction = int(np.argmax(probs))
+        confidence = float(probs[prediction])
+
+        if confidence >= CONFIDENCE_THRESHOLD:
+            ctrl.add_vote(prediction, confidence, inference_ms, centroid)
+
+        if ctrl.ready_to_commit():
+            result = ctrl.commit()
+            if result is not None:
+                return result, frame_rgb, bbox, centroid
+            break
+
+    ctrl.discard_if_voting()
+    return None, None, None, None
+
+
+def run():
+    global _shutdown_requested
+
+    gate, session, input_name = init_hardware()
+    r = init_redis()
+    belt = BeltController()
+    batch_id = fetch_active_batch_id()
+    last_batch_refresh = time.time()
+    picam2 = _init_camera()
+
+    if batch_id:
+        logger.info(f"Active batch: {batch_id}")
+    else:
+        logger.info("No active batch found. Results will be buffered without batch_id.")
+
+    logger.info("System online. Press 'q' to quit, 'r' to resume after anomaly pause.")
     ctrl = SortController()
 
     try:
-        while not _shutdown_requested:
-            frame_rgb = picam2.capture_array()
-
-            # --- Periodic batch ID refresh ---
-            now = time.time()
-            if now - last_batch_refresh > BATCH_REFRESH_INTERVAL_S:
-                new_batch = fetch_active_batch_id()
-                if new_batch and new_batch != batch_id:
-                    batch_id = new_batch
-                    logger.info(f"Batch ID refreshed: {batch_id}")
-                last_batch_refresh = now
-
-            # --- Brightness check ---
-            brightness = frame_brightness(frame_rgb)
-            ctrl.low_light = brightness < MIN_BRIGHTNESS
-            if ctrl.low_light:
-                _show_idle_frame(frame_rgb, None, False, ctrl)
-                if not HEADLESS_MODE:
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        break
-                time.sleep(IDLE_SLEEP_S)
-                continue
-
-            # --- Detect bean ---
-            bbox, centroid = find_bean(frame_rgb)
-
-            on_tripwire = False
-            if bbox is not None and centroid is not None:
-                on_tripwire = TRIPWIRE_Y_MIN <= centroid[1] <= TRIPWIRE_Y_MAX
-
-            # --- Bean left tripwire while voting -> commit or miss ---
-            if ctrl.is_voting and (bbox is None or not on_tripwire):
-                if ctrl.ready_to_commit():
-                    result = ctrl.commit()
-                    if result is not None:
-                        last_bbox = bbox if bbox is not None else (0, 0, 1, 1)
-                        last_cent = centroid if centroid is not None else ctrl.vote_centroid
-                        _execute_sort(gate, ctrl, result, r, batch_id,
-                                      frame_rgb, last_bbox, last_cent, picam2)
-                        continue
-                    else:
-                        ctrl.discard_if_voting()
-                else:
-                    ctrl.discard_if_voting()
-
-            # --- Collect votes: bean on tripwire, not paused, not the same bean we just sorted ---
-            if (bbox is not None and on_tripwire
-                    and not ctrl.paused
-                    and not ctrl.is_recently_sorted_bean(centroid)):
-
-                input_tensor = preprocess_roi(frame_rgb, bbox)
-
-                t0 = time.time()
-                outputs = session.run(None, {input_name: input_tensor})
-                inference_ms = (time.time() - t0) * 1000
-
-                probs = softmax(outputs[0][0])
-                prediction = int(np.argmax(probs))
-                confidence = float(probs[prediction])
-
-                if confidence >= CONFIDENCE_THRESHOLD:
-                    ctrl.add_vote(prediction, confidence, inference_ms, centroid)
-
-                if ctrl.ready_to_commit():
-                    result = ctrl.commit()
-                    if result is not None:
-                        _execute_sort(gate, ctrl, result, r, batch_id,
-                                      frame_rgb, bbox, centroid, picam2)
-                        continue
-
-            # --- Idle display ---
-            _show_idle_frame(frame_rgb, bbox, on_tripwire, ctrl)
-
-            if not HEADLESS_MODE:
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q'):
-                    break
-                elif key == ord('r') and ctrl.paused:
-                    ctrl.resume()
-                    logger.info("Resumed from anomaly pause")
-
-            time.sleep(IDLE_SLEEP_S)
-
+        if belt.available:
+            _run_belt_mode(gate, session, input_name, r, belt, picam2, ctrl, batch_id, last_batch_refresh)
+        else:
+            _run_passive_mode(gate, session, input_name, r, picam2, ctrl, batch_id, last_batch_refresh)
     except KeyboardInterrupt:
         logger.info("Shutdown signal received (CTRL+C)")
     finally:
+        if belt.available:
+            belt.stop()
         gate.angle = SERVO_NEUTRAL
         time.sleep(0.1)
         gate.detach()
@@ -695,6 +721,169 @@ def run():
         if not HEADLESS_MODE:
             cv2.destroyAllWindows()
         logger.info("Camera released. System shutdown.")
+
+
+def _run_belt_mode(gate, session, input_name, r, belt, picam2, ctrl, batch_id, last_batch_refresh):
+    """Pi-controlled stop-and-go: run belt -> detect bean -> stop -> classify -> sort -> repeat."""
+    global _shutdown_requested
+
+    logger.info("Belt mode: Pi controls the conveyor")
+
+    while not _shutdown_requested:
+        if _check_quit():
+            break
+
+        if ctrl.paused:
+            belt.stop()
+            frame_rgb = picam2.capture_array()
+            _show_idle_frame(frame_rgb, None, False, ctrl)
+            if not HEADLESS_MODE:
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('r'):
+                    ctrl.resume()
+                    logger.info("Resumed from anomaly pause")
+            time.sleep(IDLE_SLEEP_S)
+            continue
+
+        # --- Refresh batch ID periodically ---
+        now = time.time()
+        if now - last_batch_refresh > BATCH_REFRESH_INTERVAL_S:
+            new_batch = fetch_active_batch_id()
+            if new_batch and new_batch != batch_id:
+                batch_id = new_batch
+                logger.info(f"Batch ID refreshed: {batch_id}")
+            last_batch_refresh = now
+
+        # Step 1: Run belt and watch for a bean to appear
+        belt.forward()
+        bean_found = False
+
+        while not _shutdown_requested and not bean_found:
+            frame_rgb = picam2.capture_array()
+
+            brightness = frame_brightness(frame_rgb)
+            ctrl.low_light = brightness < MIN_BRIGHTNESS
+
+            bbox, centroid = find_bean(frame_rgb)
+            on_tripwire = False
+            if bbox is not None and centroid is not None:
+                on_tripwire = TRIPWIRE_Y_MIN <= centroid[1] <= TRIPWIRE_Y_MAX
+
+            _show_idle_frame(frame_rgb, bbox, on_tripwire, ctrl)
+
+            if on_tripwire and not ctrl.low_light:
+                bean_found = True
+
+            if _check_quit():
+                return
+
+            time.sleep(IDLE_SLEEP_S)
+
+        if _shutdown_requested:
+            break
+
+        # Step 2: Bean detected on tripwire — stop belt, let it settle
+        belt.stop()
+        time.sleep(BELT_SETTLE_S)
+
+        # Step 3: Classify the stationary bean (sharp, no blur)
+        result, frame_rgb, bbox, centroid = _classify_stationary_bean(
+            session, input_name, picam2, ctrl)
+
+        if result is not None:
+            # Step 4: Sort — gate opens, belt pushes bean through
+            _execute_sort(gate, ctrl, result, r, batch_id,
+                          frame_rgb, bbox, centroid, picam2, belt)
+        else:
+            # Bean detected but classification failed — push it through anyway
+            logger.info("Classification inconclusive, advancing belt")
+            belt.clearance_pulse()
+
+        # Brief pause before next cycle
+        time.sleep(0.2)
+
+
+def _run_passive_mode(gate, session, input_name, r, picam2, ctrl, batch_id, last_batch_refresh):
+    """Fallback: no belt control, passively watch a moving belt (original behavior)."""
+    global _shutdown_requested
+
+    logger.info("Passive mode: no belt control, watching moving belt")
+    dummy_belt = BeltController()  # no-op belt (conn=None)
+
+    while not _shutdown_requested:
+        frame_rgb = picam2.capture_array()
+
+        now = time.time()
+        if now - last_batch_refresh > BATCH_REFRESH_INTERVAL_S:
+            new_batch = fetch_active_batch_id()
+            if new_batch and new_batch != batch_id:
+                batch_id = new_batch
+                logger.info(f"Batch ID refreshed: {batch_id}")
+            last_batch_refresh = now
+
+        brightness = frame_brightness(frame_rgb)
+        ctrl.low_light = brightness < MIN_BRIGHTNESS
+        if ctrl.low_light:
+            _show_idle_frame(frame_rgb, None, False, ctrl)
+            if _check_quit():
+                break
+            time.sleep(IDLE_SLEEP_S)
+            continue
+
+        bbox, centroid = find_bean(frame_rgb)
+
+        on_tripwire = False
+        if bbox is not None and centroid is not None:
+            on_tripwire = TRIPWIRE_Y_MIN <= centroid[1] <= TRIPWIRE_Y_MAX
+
+        if ctrl.is_voting and (bbox is None or not on_tripwire):
+            if ctrl.ready_to_commit():
+                result = ctrl.commit()
+                if result is not None:
+                    last_bbox = bbox if bbox is not None else (0, 0, 1, 1)
+                    last_cent = centroid if centroid is not None else ctrl.vote_centroid
+                    _execute_sort(gate, ctrl, result, r, batch_id,
+                                  frame_rgb, last_bbox, last_cent, picam2, dummy_belt)
+                    continue
+                else:
+                    ctrl.discard_if_voting()
+            else:
+                ctrl.discard_if_voting()
+
+        if (bbox is not None and on_tripwire
+                and not ctrl.paused
+                and not ctrl.is_recently_sorted_bean(centroid)):
+
+            input_tensor = preprocess_roi(frame_rgb, bbox)
+            t0 = time.time()
+            outputs = session.run(None, {input_name: input_tensor})
+            inference_ms = (time.time() - t0) * 1000
+
+            probs = softmax(outputs[0][0])
+            prediction = int(np.argmax(probs))
+            confidence = float(probs[prediction])
+
+            if confidence >= CONFIDENCE_THRESHOLD:
+                ctrl.add_vote(prediction, confidence, inference_ms, centroid)
+
+            if ctrl.ready_to_commit():
+                result = ctrl.commit()
+                if result is not None:
+                    _execute_sort(gate, ctrl, result, r, batch_id,
+                                  frame_rgb, bbox, centroid, picam2, dummy_belt)
+                    continue
+
+        _show_idle_frame(frame_rgb, bbox, on_tripwire, ctrl)
+
+        if not HEADLESS_MODE:
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                break
+            elif key == ord('r') and ctrl.paused:
+                ctrl.resume()
+                logger.info("Resumed from anomaly pause")
+
+        time.sleep(IDLE_SLEEP_S)
 
 
 if __name__ == "__main__":
