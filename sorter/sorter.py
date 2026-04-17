@@ -16,8 +16,9 @@ import serial
 from gpiozero import AngularServo
 from picamera2 import Picamera2
 
+_LOG_LEVEL = logging.DEBUG if os.getenv("VERBOSE", "0") == "1" else logging.INFO
 logging.basicConfig(
-    level=logging.INFO,
+    level=_LOG_LEVEL,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
 )
@@ -60,6 +61,9 @@ MORPH_CLOSE_SIZE = int(os.getenv("MORPH_CLOSE_SIZE", "31"))  # fill bean interio
 
 # --- Debug window ---
 DEBUG_WINDOW = os.getenv("DEBUG_WINDOW", "0") == "1"
+# Set to 0 to send the raw bbox crop (cloth+shadow included) to the model,
+# matching the likely training-time distribution.  Set to 1 to mask background.
+MASK_MODEL_INPUT = os.getenv("MASK_MODEL_INPUT", "0") == "1"
 
 # --- Brightness validation ---
 MIN_BRIGHTNESS = int(os.getenv("MIN_BRIGHTNESS", "30"))
@@ -78,7 +82,10 @@ SERVO_POOR = float(os.getenv("SERVO_POOR", "-180"))
 
 # --- Classification ---
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.65"))
-LABELS = {0: "POOR BEAN", 1: "GOOD BEAN"}
+# If every bean comes back POOR, try SWAP_LABELS=1 — the training may have used
+# the opposite index convention (0=good, 1=poor).
+SWAP_LABELS = os.getenv("SWAP_LABELS", "0") == "1"
+LABELS = {0: "GOOD BEAN", 1: "POOR BEAN"} if SWAP_LABELS else {0: "POOR BEAN", 1: "GOOD BEAN"}
 
 # --- Smart sort algorithm ---
 VOTES_REQUIRED = int(os.getenv("VOTES_REQUIRED", "1"))
@@ -464,14 +471,13 @@ def preprocess_roi(frame, bbox):
     x1, y1, x2, y2 = bbox
     cropped = frame[y1:y2, x1:x2].copy()
 
-    # Mask out shadow and cloth within the bbox
-    fg_mask = _build_bean_fg_mask(frame)
-    crop_mask = fg_mask[y1:y2, x1:x2]
-    if crop_mask.any():
-        # ImageNet mean in uint8 RGB — visually neutral grey for the model
-        imagenet_grey = (IMAGENET_MEAN * 255).astype(np.uint8)
-        mask_3ch = np.stack([crop_mask] * 3, axis=-1) > 0
-        cropped = np.where(mask_3ch, cropped, imagenet_grey.reshape(1, 1, 3))
+    if MASK_MODEL_INPUT:
+        fg_mask = _build_bean_fg_mask(frame)
+        crop_mask = fg_mask[y1:y2, x1:x2]
+        if crop_mask.any():
+            imagenet_grey = (IMAGENET_MEAN * 255).astype(np.uint8)
+            mask_3ch = np.stack([crop_mask] * 3, axis=-1) > 0
+            cropped = np.where(mask_3ch, cropped, imagenet_grey.reshape(1, 1, 3))
 
     _last_model_crop_rgb = cv2.resize(cropped, (224, 224))
 
@@ -815,6 +821,12 @@ def _classify_stationary_bean(session, input_name, picam2, ctrl):
         prediction = int(np.argmax(probs))
         confidence = float(probs[prediction])
 
+        logger.debug(
+            f"classify_stationary | raw logits: {outputs[0][0]} | "
+            f"p(class0)={probs[0]:.3f} p(class1)={probs[1]:.3f} | "
+            f"pred={prediction} ({LABELS[prediction]}) conf={confidence:.3f}"
+        )
+
         if confidence >= CONFIDENCE_THRESHOLD:
             ctrl.add_vote(prediction, confidence, inference_ms, centroid)
 
@@ -1007,6 +1019,12 @@ def _run_passive_mode(gate, session, input_name, r, picam2, ctrl, batch_id, last
             probs = softmax(outputs[0][0])
             prediction = int(np.argmax(probs))
             confidence = float(probs[prediction])
+
+            logger.debug(
+                f"passive | raw logits: {outputs[0][0]} | "
+                f"p(class0)={probs[0]:.3f} p(class1)={probs[1]:.3f} | "
+                f"pred={prediction} ({LABELS[prediction]}) conf={confidence:.3f}"
+            )
 
             if confidence >= CONFIDENCE_THRESHOLD:
                 ctrl.add_vote(prediction, confidence, inference_ms, centroid)
