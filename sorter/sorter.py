@@ -36,7 +36,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 POD_ID = os.getenv("POD_ID", "pod_01")
 
 # --- Contour / bean detection ---
-MIN_CONTOUR_AREA = int(os.getenv("MIN_CONTOUR_AREA", "2500"))
+MIN_CONTOUR_AREA = int(os.getenv("MIN_CONTOUR_AREA", "1500"))
 MAX_CONTOUR_AREA = int(os.getenv("MAX_CONTOUR_AREA", "80000"))
 MIN_SOLIDITY = float(os.getenv("MIN_SOLIDITY", "0.5"))
 MIN_ASPECT_RATIO = 0.3
@@ -61,9 +61,6 @@ MORPH_CLOSE_SIZE = int(os.getenv("MORPH_CLOSE_SIZE", "31"))  # fill bean interio
 
 # --- Debug window ---
 DEBUG_WINDOW = os.getenv("DEBUG_WINDOW", "0") == "1"
-# Set to 0 to send the raw bbox crop (cloth+shadow included) to the model,
-# matching the likely training-time distribution.  Set to 1 to mask background.
-MASK_MODEL_INPUT = os.getenv("MASK_MODEL_INPUT", "0") == "1"
 
 # --- Brightness validation ---
 MIN_BRIGHTNESS = int(os.getenv("MIN_BRIGHTNESS", "30"))
@@ -340,32 +337,26 @@ def _build_bean_fg_mask(frame_rgb):
     return cv2.morphologyEx(opened, cv2.MORPH_CLOSE, close_k)
 
 
-def _find_bean_contours(blurred, frame_w, frame_h, fg_mask=None):
+def _find_bean_contours(blurred, frame_w, frame_h):
     """
-    Detection priority:
-      1. Color-based HSV mask (saturation-primary, robust against cloth texture)
-      2. Adaptive threshold fallback
-      3. Otsu fallback
-    Returns (contours, source) where source is 'color'|'adaptive'|'otsu'.
+    Detection priority — mirrors the original working script:
+      1. Otsu  — global threshold, reliable for any bean colour on the bright belt
+      2. Adaptive threshold — fallback for uneven lighting
+    HSV colour mask is NOT used for detection; it exists only for debug visualisation.
+    Returns (contours, source) where source is 'otsu'|'adaptive'.
     """
-    if fg_mask is not None:
-        contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        beans = [c for c in contours if is_bean_contour(c, frame_w, frame_h)]
-        if beans:
-            return beans, "color"
+    _, otsu = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    contours, _ = cv2.findContours(otsu, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    beans = [c for c in contours if is_bean_contour(c, frame_w, frame_h)]
+    if beans:
+        return beans, "otsu"
 
     adaptive = cv2.adaptiveThreshold(
         blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY_INV, ADAPTIVE_BLOCK_SIZE, ADAPTIVE_C,
     )
     contours, _ = cv2.findContours(adaptive, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    beans = [c for c in contours if is_bean_contour(c, frame_w, frame_h)]
-    if beans:
-        return beans, "adaptive"
-
-    _, otsu = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    contours, _ = cv2.findContours(otsu, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    return [c for c in contours if is_bean_contour(c, frame_w, frame_h)], "otsu"
+    return [c for c in contours if is_bean_contour(c, frame_w, frame_h)], "adaptive"
 
 
 def _show_debug_window(frame_rgb, fg_mask, bean_contours, detection_source):
@@ -430,10 +421,11 @@ def find_bean(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
     blurred = cv2.GaussianBlur(gray, (7, 7), 0)
 
-    fg_mask = _build_bean_fg_mask(frame)
-    bean_contours, detection_source = _find_bean_contours(blurred, frame_w, frame_h, fg_mask=fg_mask)
+    bean_contours, detection_source = _find_bean_contours(blurred, frame_w, frame_h)
 
     if DEBUG_WINDOW and not HEADLESS_MODE:
+        # HSV mask is built here only for the debug visualisation panel — not used for detection.
+        fg_mask = _build_bean_fg_mask(frame)
         _show_debug_window(frame, fg_mask, bean_contours, detection_source)
 
     if not bean_contours:
@@ -456,30 +448,19 @@ _last_model_crop_rgb: np.ndarray | None = None
 
 
 def preprocess_roi(frame, bbox):
-    """
-    Crop ROI and prepare the model input tensor.
-    Non-bean pixels (cloth, shadows) are replaced with ImageNet mean grey so
-    the model evaluates only the bean surface, not background artefacts.
-    """
+    """Crop bbox and prepare the model input tensor (matches original working script)."""
     global _last_model_crop_rgb
 
     if frame.shape[-1] == 4:
         frame = frame[:, :, :3]
 
     x1, y1, x2, y2 = bbox
-    cropped = frame[y1:y2, x1:x2].copy()
+    cropped = frame[y1:y2, x1:x2]
 
-    if MASK_MODEL_INPUT:
-        fg_mask = _build_bean_fg_mask(frame)
-        crop_mask = fg_mask[y1:y2, x1:x2]
-        if crop_mask.any():
-            imagenet_grey = (IMAGENET_MEAN * 255).astype(np.uint8)
-            mask_3ch = np.stack([crop_mask] * 3, axis=-1) > 0
-            cropped = np.where(mask_3ch, cropped, imagenet_grey.reshape(1, 1, 3))
+    resized = cv2.resize(cropped, (224, 224))
+    _last_model_crop_rgb = resized.copy()
 
-    _last_model_crop_rgb = cv2.resize(cropped, (224, 224))
-
-    img = cv2.resize(cropped, (224, 224)).astype(np.float32) / 255.0
+    img = resized.astype(np.float32) / 255.0
     img = (img - IMAGENET_MEAN) / IMAGENET_STD
     img = np.transpose(img, (2, 0, 1))
     return np.expand_dims(img, axis=0).astype(np.float32)
