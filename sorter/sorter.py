@@ -27,7 +27,7 @@ logger = logging.getLogger("invisi.sorter")
 # Configuration — all tunables are env-configurable
 # ---------------------------------------------------------------------------
 
-MODEL_PATH = os.getenv("MODEL_PATH", "/home/invisi/Desktop/invisi_models/Trained_ResNet50_INT8.onnx")
+MODEL_PATH = os.getenv("MODEL_PATH", "/home/invisi/Desktop/invisi_models/Trained_MobileNetV3_INT8.onnx")
 SERVO_PIN = int(os.getenv("SERVO_PIN", "18"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
