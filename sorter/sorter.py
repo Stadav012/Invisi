@@ -91,12 +91,7 @@ DRIFT_POOR_RATIO = float(os.getenv("DRIFT_POOR_RATIO", "0.9"))
 CENTROID_JUMP_PX = float(os.getenv("CENTROID_JUMP_PX", "50"))
 
 # --- Camera ---
-EXPOSURE_TIME_US = int(os.getenv("EXPOSURE_TIME_US", "2000"))
-ANALOGUE_GAIN = float(os.getenv("ANALOGUE_GAIN", "4.0"))
 CAMERA_WARMUP_FRAMES = 15
-# Lens position in diopters: higher = closer focus. Formula: 100 / distance_cm.
-# At 5.5cm you need ~18, but IMX708 max is ~15. Set as high as the lens allows.
-MANUAL_LENS_POSITION = float(os.getenv("MANUAL_LENS_POSITION", "15.0"))
 
 # --- Tripwire zone (Y pixel range) ---
 TRIPWIRE_Y_MIN = int(os.getenv("TRIPWIRE_Y_MIN", "120"))
@@ -778,19 +773,10 @@ def _init_camera():
     picam2.configure(config)
     picam2.start()
 
-    picam2.set_controls({
-        "ExposureTime": EXPOSURE_TIME_US,
-        "AnalogueGain": ANALOGUE_GAIN,
-    })
-
-    if MANUAL_LENS_POSITION > 0:
-        logger.info(f"Manual focus at {MANUAL_LENS_POSITION} diopters")
-        picam2.set_controls({"AfMode": 0, "LensPosition": MANUAL_LENS_POSITION})
-    else:
-        logger.info("Running one-shot autofocus then locking")
-        picam2.set_controls({"AfMode": 1, "AfRange": 2, "AfTrigger": 0})
-        time.sleep(2.0)
-        picam2.set_controls({"AfMode": 0})
+    # Use continuous macro autofocus — same as the reference script.
+    # Auto-exposure and auto-gain are left at camera defaults so the image
+    # brightness matches what the model was trained on.
+    picam2.set_controls({"AfMode": 2, "AfRange": 2})
 
     logger.info(f"Discarding {CAMERA_WARMUP_FRAMES} warmup frames")
     for _ in range(CAMERA_WARMUP_FRAMES):
