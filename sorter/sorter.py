@@ -365,30 +365,29 @@ def _find_bean_contours(blurred, frame_w, frame_h, fg_mask=None):
 
 def _show_debug_window(frame_rgb, fg_mask, bean_contours, detection_source):
     """
-    Side-by-side debug window:
-      LEFT  — HSV colour mask (what the saturation filter sees)
-      RIGHT — live camera frame with detected contours overlaid
-    Helps tune BEAN_SAT_MIN / BEAN_VAL_MIN without guessing.
+    Three-panel debug window:
+      LEFT   — HSV colour mask with detected contours
+      CENTRE — live camera frame with contours + tripwire
+      RIGHT  — exactly what the model receives (masked crop, background = grey)
     """
-    frame_w = frame_rgb.shape[1]
-    frame_h = frame_rgb.shape[0]
+    frame_h, frame_w = frame_rgb.shape[:2]
 
-    # Left panel: mask as 3-channel
+    # --- Left: colour mask ---
     mask_bgr = cv2.cvtColor(fg_mask, cv2.COLOR_GRAY2BGR)
     cv2.drawContours(mask_bgr, bean_contours, -1, (0, 255, 0), 2)
     cv2.line(mask_bgr, (0, TRIPWIRE_Y_MIN), (frame_w, TRIPWIRE_Y_MIN), (0, 255, 255), 1)
     cv2.line(mask_bgr, (0, TRIPWIRE_Y_MAX), (frame_w, TRIPWIRE_Y_MAX), (0, 255, 255), 1)
     cv2.putText(mask_bgr, "COLOR MASK", (8, 22),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
-    cv2.putText(mask_bgr, f"SAT>={BEAN_SAT_MIN} VAL>={BEAN_VAL_MIN} O={MORPH_OPEN_SIZE} C={MORPH_CLOSE_SIZE}",
+    cv2.putText(mask_bgr,
+                f"SAT>={BEAN_SAT_MIN} VAL>={BEAN_VAL_MIN} O={MORPH_OPEN_SIZE} C={MORPH_CLOSE_SIZE}",
                 (8, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 0), 1)
 
-    # Right panel: live camera feed with contours
+    # --- Centre: live camera ---
     cam_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
     cv2.drawContours(cam_bgr, bean_contours, -1, (0, 255, 0), 2)
     cv2.line(cam_bgr, (0, TRIPWIRE_Y_MIN), (frame_w, TRIPWIRE_Y_MIN), (0, 255, 255), 1)
     cv2.line(cam_bgr, (0, TRIPWIRE_Y_MAX), (frame_w, TRIPWIRE_Y_MAX), (0, 255, 255), 1)
-
     found_label = f"BEAN FOUND [{detection_source}]" if bean_contours else "NO BEAN"
     label_color = (0, 255, 0) if bean_contours else (0, 0, 255)
     cv2.putText(cam_bgr, found_label, (8, 22),
@@ -396,10 +395,20 @@ def _show_debug_window(frame_rgb, fg_mask, bean_contours, detection_source):
     cv2.putText(cam_bgr, "CAMERA", (8, 44),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 0), 1)
 
-    debug = np.hstack([mask_bgr, cam_bgr])
+    # --- Right: model input (last masked crop, scaled to frame height) ---
+    if _last_model_crop_rgb is not None:
+        model_view = cv2.cvtColor(_last_model_crop_rgb, cv2.COLOR_RGB2BGR)
+        model_view = cv2.resize(model_view, (frame_w, frame_h))
+    else:
+        model_view = np.zeros((frame_h, frame_w, 3), dtype=np.uint8)
+    cv2.putText(model_view, "MODEL INPUT", (8, 22),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
+    cv2.putText(model_view, "bg=imagenet grey", (8, 44),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 0), 1)
 
-    # Scale down if the combined frame is too wide for a typical monitor
-    max_w = 1200
+    debug = np.hstack([mask_bgr, cam_bgr, model_view])
+
+    max_w = 1400
     if debug.shape[1] > max_w:
         scale = max_w / debug.shape[1]
         debug = cv2.resize(debug, (max_w, int(debug.shape[0] * scale)))
@@ -437,13 +446,34 @@ def find_bean(frame):
     return (x1, y1, x2, y2), centroid
 
 
+# Last masked crop sent to the model — written by preprocess_roi, read by debug window.
+_last_model_crop_rgb: np.ndarray | None = None
+
+
 def preprocess_roi(frame, bbox):
-    """Crop ROI from frame and prepare the model input tensor."""
+    """
+    Crop ROI and prepare the model input tensor.
+    Non-bean pixels (cloth, shadows) are replaced with ImageNet mean grey so
+    the model evaluates only the bean surface, not background artefacts.
+    """
+    global _last_model_crop_rgb
+
     if frame.shape[-1] == 4:
         frame = frame[:, :, :3]
 
     x1, y1, x2, y2 = bbox
-    cropped = frame[y1:y2, x1:x2]
+    cropped = frame[y1:y2, x1:x2].copy()
+
+    # Mask out shadow and cloth within the bbox
+    fg_mask = _build_bean_fg_mask(frame)
+    crop_mask = fg_mask[y1:y2, x1:x2]
+    if crop_mask.any():
+        # ImageNet mean in uint8 RGB — visually neutral grey for the model
+        imagenet_grey = (IMAGENET_MEAN * 255).astype(np.uint8)
+        mask_3ch = np.stack([crop_mask] * 3, axis=-1) > 0
+        cropped = np.where(mask_3ch, cropped, imagenet_grey.reshape(1, 1, 3))
+
+    _last_model_crop_rgb = cv2.resize(cropped, (224, 224))
 
     img = cv2.resize(cropped, (224, 224)).astype(np.float32) / 255.0
     img = (img - IMAGENET_MEAN) / IMAGENET_STD
