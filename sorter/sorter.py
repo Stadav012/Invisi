@@ -46,12 +46,16 @@ ADAPTIVE_BLOCK_SIZE = int(os.getenv("ADAPTIVE_BLOCK_SIZE", "51"))
 ADAPTIVE_C = int(os.getenv("ADAPTIVE_C", "10"))
 
 # --- Color-based bean segmentation (HSV) ---
-# Rejects bright white cloth (high V + low S) and very dark threads (low V).
-# Bean occupies the middle ground: medium brightness, meaningful saturation.
-BEAN_SAT_MIN = int(os.getenv("BEAN_SAT_MIN", "30"))    # exclude white cloth (low S)
-BEAN_VAL_MIN = int(os.getenv("BEAN_VAL_MIN", "50"))    # exclude dark threads / shadows
-BEAN_VAL_MAX = int(os.getenv("BEAN_VAL_MAX", "210"))   # exclude bright white belt surface
+# Saturation is the primary discriminator:
+#   white/grey cloth  → S ≈ 0–20   (nearly colourless)
+#   dark threads      → V ≈ 0–50   (very dark regardless of S)
+#   tan/brown bean    → S ≥ 30+    (visibly coloured, even if bright)
+BEAN_SAT_MIN = int(os.getenv("BEAN_SAT_MIN", "25"))    # min S; raise if cloth bleeds through
+BEAN_VAL_MIN = int(os.getenv("BEAN_VAL_MIN", "40"))    # min V; exclude dark threads / shadows
 MORPH_KERNEL_SIZE = int(os.getenv("MORPH_KERNEL_SIZE", "11"))  # closing kernel; fills bean body
+
+# --- Debug window ---
+DEBUG_WINDOW = os.getenv("DEBUG_WINDOW", "0") == "1"
 
 # --- Brightness validation ---
 MIN_BRIGHTNESS = int(os.getenv("MIN_BRIGHTNESS", "30"))
@@ -298,10 +302,10 @@ def is_bean_contour(contour, frame_w, frame_h):
 
 def _build_bean_fg_mask(frame_rgb):
     """
-    HSV-based foreground mask that isolates the bean by exclusion:
-      - rejects bright white/grey belt (high V, low S)
-      - rejects very dark thread intersections and shadows (low V)
-    Morphological close fills the bean interior into a single solid blob.
+    Saturation-primary HSV mask.
+    Bean (tan/brown) has S ≥ BEAN_SAT_MIN.
+    White cloth has S ≈ 0; dark threads have V < BEAN_VAL_MIN.
+    Morphological close fills the bean interior into one solid blob.
     """
     bgr = cv2.cvtColor(frame_rgb[:, :, :3], cv2.COLOR_RGB2BGR)
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
@@ -309,12 +313,7 @@ def _build_bean_fg_mask(frame_rgb):
     s = hsv[:, :, 1]
     v = hsv[:, :, 2]
 
-    # Pixels that belong to the cloth surface: bright AND desaturated
-    is_cloth = (v > BEAN_VAL_MAX) & (s < BEAN_SAT_MIN)
-    # Pixels that are too dark: threads, belt frame, deep shadows
-    is_dark = v < BEAN_VAL_MIN
-
-    foreground = np.uint8(~(is_cloth | is_dark)) * 255
+    foreground = np.uint8((s >= BEAN_SAT_MIN) & (v >= BEAN_VAL_MIN)) * 255
 
     kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE, (MORPH_KERNEL_SIZE, MORPH_KERNEL_SIZE)
@@ -322,19 +321,19 @@ def _build_bean_fg_mask(frame_rgb):
     return cv2.morphologyEx(foreground, cv2.MORPH_CLOSE, kernel)
 
 
-def _find_bean_contours(blurred, frame_w, frame_h, frame_rgb=None):
+def _find_bean_contours(blurred, frame_w, frame_h, fg_mask=None):
     """
     Detection priority:
-      1. Color-based HSV mask (robust against cloth texture)
+      1. Color-based HSV mask (saturation-primary, robust against cloth texture)
       2. Adaptive threshold fallback
       3. Otsu fallback
+    Returns (contours, source) where source is 'color'|'adaptive'|'otsu'.
     """
-    if frame_rgb is not None:
-        fg_mask = _build_bean_fg_mask(frame_rgb)
+    if fg_mask is not None:
         contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         beans = [c for c in contours if is_bean_contour(c, frame_w, frame_h)]
         if beans:
-            return beans
+            return beans, "color"
 
     adaptive = cv2.adaptiveThreshold(
         blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -343,11 +342,55 @@ def _find_bean_contours(blurred, frame_w, frame_h, frame_rgb=None):
     contours, _ = cv2.findContours(adaptive, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     beans = [c for c in contours if is_bean_contour(c, frame_w, frame_h)]
     if beans:
-        return beans
+        return beans, "adaptive"
 
     _, otsu = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     contours, _ = cv2.findContours(otsu, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    return [c for c in contours if is_bean_contour(c, frame_w, frame_h)]
+    return [c for c in contours if is_bean_contour(c, frame_w, frame_h)], "otsu"
+
+
+def _show_debug_window(frame_rgb, fg_mask, bean_contours, detection_source):
+    """
+    Side-by-side debug window:
+      LEFT  — HSV colour mask (what the saturation filter sees)
+      RIGHT — live camera frame with detected contours overlaid
+    Helps tune BEAN_SAT_MIN / BEAN_VAL_MIN without guessing.
+    """
+    frame_w = frame_rgb.shape[1]
+    frame_h = frame_rgb.shape[0]
+
+    # Left panel: mask as 3-channel
+    mask_bgr = cv2.cvtColor(fg_mask, cv2.COLOR_GRAY2BGR)
+    cv2.drawContours(mask_bgr, bean_contours, -1, (0, 255, 0), 2)
+    cv2.line(mask_bgr, (0, TRIPWIRE_Y_MIN), (frame_w, TRIPWIRE_Y_MIN), (0, 255, 255), 1)
+    cv2.line(mask_bgr, (0, TRIPWIRE_Y_MAX), (frame_w, TRIPWIRE_Y_MAX), (0, 255, 255), 1)
+    cv2.putText(mask_bgr, "COLOR MASK", (8, 22),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
+    cv2.putText(mask_bgr, f"SAT>={BEAN_SAT_MIN}  VAL>={BEAN_VAL_MIN}", (8, 44),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 0), 1)
+
+    # Right panel: live camera feed with contours
+    cam_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+    cv2.drawContours(cam_bgr, bean_contours, -1, (0, 255, 0), 2)
+    cv2.line(cam_bgr, (0, TRIPWIRE_Y_MIN), (frame_w, TRIPWIRE_Y_MIN), (0, 255, 255), 1)
+    cv2.line(cam_bgr, (0, TRIPWIRE_Y_MAX), (frame_w, TRIPWIRE_Y_MAX), (0, 255, 255), 1)
+
+    found_label = f"BEAN FOUND [{detection_source}]" if bean_contours else "NO BEAN"
+    label_color = (0, 255, 0) if bean_contours else (0, 0, 255)
+    cv2.putText(cam_bgr, found_label, (8, 22),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, label_color, 2)
+    cv2.putText(cam_bgr, "CAMERA", (8, 44),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 0), 1)
+
+    debug = np.hstack([mask_bgr, cam_bgr])
+
+    # Scale down if the combined frame is too wide for a typical monitor
+    max_w = 1200
+    if debug.shape[1] > max_w:
+        scale = max_w / debug.shape[1]
+        debug = cv2.resize(debug, (max_w, int(debug.shape[0] * scale)))
+
+    cv2.imshow("Invisi Debug", debug)
 
 
 def find_bean(frame):
@@ -359,7 +402,12 @@ def find_bean(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
     blurred = cv2.GaussianBlur(gray, (7, 7), 0)
 
-    bean_contours = _find_bean_contours(blurred, frame_w, frame_h, frame_rgb=frame)
+    fg_mask = _build_bean_fg_mask(frame)
+    bean_contours, detection_source = _find_bean_contours(blurred, frame_w, frame_h, fg_mask=fg_mask)
+
+    if DEBUG_WINDOW and not HEADLESS_MODE:
+        _show_debug_window(frame, fg_mask, bean_contours, detection_source)
+
     if not bean_contours:
         return None, None
 
