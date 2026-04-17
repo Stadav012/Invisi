@@ -85,7 +85,7 @@ LABELS = {0: "POOR BEAN", 1: "GOOD BEAN"}
 # --- Smart sort algorithm ---
 VOTES_REQUIRED = int(os.getenv("VOTES_REQUIRED", "1"))
 VOTE_WINDOW_S = float(os.getenv("VOTE_WINDOW_S", "2.0"))
-MAX_CONSECUTIVE_POOR = int(os.getenv("MAX_CONSECUTIVE_POOR", "5"))
+MAX_CONSECUTIVE_POOR = int(os.getenv("MAX_CONSECUTIVE_POOR", "5"))  # unused, kept for config compat
 DRIFT_WINDOW = int(os.getenv("DRIFT_WINDOW", "30"))
 DRIFT_POOR_RATIO = float(os.getenv("DRIFT_POOR_RATIO", "0.9"))
 CENTROID_JUMP_PX = float(os.getenv("CENTROID_JUMP_PX", "50"))
@@ -502,7 +502,7 @@ def _centroid_distance(a, b):
 
 
 class SortController:
-    """Multi-frame voting, centroid tracking, anomaly suppression, drift detection."""
+    """Multi-frame voting, centroid tracking, drift detection."""
 
     def __init__(self):
         self.votes = []
@@ -513,14 +513,13 @@ class SortController:
         self.last_sort_time = 0.0
         self.last_sorted_centroid = None
         self.consecutive_poor = 0
-        self.paused = False
         self.drift_warning = False
         self.low_light = False
         self.recent_results = []
 
         self.stats = {
             "good": 0, "poor": 0, "rejected": 0,
-            "missed": 0, "anomaly_pauses": 0,
+            "missed": 0,
         }
 
     def is_same_bean(self, centroid):
@@ -608,7 +607,6 @@ class SortController:
         if len(self.recent_results) > DRIFT_WINDOW:
             self.recent_results.pop(0)
 
-        self._check_anomaly()
         self._check_drift()
 
     def discard_if_voting(self):
@@ -626,12 +624,6 @@ class SortController:
         self.vote_times_ms = []
         self.vote_centroid = None
 
-    def _check_anomaly(self):
-        if self.consecutive_poor >= MAX_CONSECUTIVE_POOR and not self.paused:
-            self.paused = True
-            self.stats["anomaly_pauses"] += 1
-            logger.warning(f"ANOMALY: {self.consecutive_poor} consecutive poor - pausing")
-
     def _check_drift(self):
         if len(self.recent_results) < DRIFT_WINDOW:
             self.drift_warning = False
@@ -640,14 +632,11 @@ class SortController:
         self.drift_warning = poor_ratio >= DRIFT_POOR_RATIO
 
     def resume(self):
-        self.paused = False
         self.consecutive_poor = 0
         self._clear_votes()
 
     @property
     def status_text(self):
-        if self.paused:
-            return "PAUSED - anomaly detected, press 'r' to resume"
         if self.low_light:
             return "LOW LIGHT - add lighting, classification skipped"
         if self.drift_warning:
@@ -678,9 +667,6 @@ def _draw_stats(display_frame, ctrl):
 
     if ctrl.drift_warning:
         _put_bold_text(display_frame, "DRIFT WARNING", (10, 95), 0.55, (0, 165, 255), 2)
-    if s["anomaly_pauses"] > 0:
-        _put_bold_text(display_frame, f"Pauses: {s['anomaly_pauses']}",
-                       (450, 95), 0.45, (100, 100, 255), 1)
 
 
 def _show_sorted_frame(frame_rgb, bbox, label, confidence, inference_ms, ctrl, votes_used):
@@ -713,13 +699,11 @@ def _show_idle_frame(frame_rgb, bbox, on_tripwire, ctrl):
         cv2.rectangle(display_frame, (x1, y1), (x2, y2), box_color, 2)
 
     status = ctrl.status_text
-    if bbox is not None and not on_tripwire and not ctrl.paused and not ctrl.is_voting:
+    if bbox is not None and not on_tripwire and not ctrl.is_voting:
         status = "BEAN SEEN - not on tripwire yet"
 
     status_color = (255, 255, 255)
-    if ctrl.paused:
-        status_color = (0, 0, 255)
-    elif ctrl.low_light:
+    if ctrl.low_light:
         status_color = (0, 100, 255)
     elif ctrl.drift_warning:
         status_color = (0, 165, 255)
@@ -849,7 +833,7 @@ def run():
     else:
         logger.info("No active batch found. Results will be buffered without batch_id.")
 
-    logger.info("System online. Press 'q' to quit, 'r' to resume after anomaly pause.")
+    logger.info("System online. Press 'q' to quit.")
     ctrl = SortController()
 
     try:
@@ -880,18 +864,6 @@ def _run_belt_mode(gate, session, input_name, r, belt, picam2, ctrl, batch_id, l
     while not _shutdown_requested:
         if _check_quit():
             break
-
-        if ctrl.paused:
-            belt.stop()
-            frame_rgb = picam2.capture_array()
-            _show_idle_frame(frame_rgb, None, False, ctrl)
-            if not HEADLESS_MODE:
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('r'):
-                    ctrl.resume()
-                    logger.info("Resumed from anomaly pause")
-            time.sleep(IDLE_SLEEP_S)
-            continue
 
         # --- Refresh batch ID periodically ---
         now = time.time()
@@ -1002,7 +974,6 @@ def _run_passive_mode(gate, session, input_name, r, picam2, ctrl, batch_id, last
                 ctrl.discard_if_voting()
 
         if (bbox is not None and on_tripwire
-                and not ctrl.paused
                 and not ctrl.is_recently_sorted_bean(centroid)):
 
             input_tensor = preprocess_roi(frame_rgb, bbox)
@@ -1036,9 +1007,6 @@ def _run_passive_mode(gate, session, input_name, r, picam2, ctrl, batch_id, last
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
                 break
-            elif key == ord('r') and ctrl.paused:
-                ctrl.resume()
-                logger.info("Resumed from anomaly pause")
 
         time.sleep(IDLE_SLEEP_S)
 
