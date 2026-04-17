@@ -50,9 +50,13 @@ ADAPTIVE_C = int(os.getenv("ADAPTIVE_C", "10"))
 #   white/grey cloth  → S ≈ 0–20   (nearly colourless)
 #   dark threads      → V ≈ 0–50   (very dark regardless of S)
 #   tan/brown bean    → S ≥ 30+    (visibly coloured, even if bright)
-BEAN_SAT_MIN = int(os.getenv("BEAN_SAT_MIN", "25"))    # min S; raise if cloth bleeds through
-BEAN_VAL_MIN = int(os.getenv("BEAN_VAL_MIN", "40"))    # min V; exclude dark threads / shadows
-MORPH_KERNEL_SIZE = int(os.getenv("MORPH_KERNEL_SIZE", "11"))  # closing kernel; fills bean body
+BEAN_SAT_MIN = int(os.getenv("BEAN_SAT_MIN", "30"))     # min S; raise if cloth bleeds through
+BEAN_VAL_MIN = int(os.getenv("BEAN_VAL_MIN", "40"))     # min V; exclude dark threads / shadows
+# Two-stage morphology:
+#   OPEN  — erodes then dilates; kills small speckle noise from cloth texture
+#   CLOSE — dilates then erodes; fills wrinkle lines and dark blemish holes inside the bean
+MORPH_OPEN_SIZE  = int(os.getenv("MORPH_OPEN_SIZE",  "7"))   # remove cloth speckle (≤ kernel px)
+MORPH_CLOSE_SIZE = int(os.getenv("MORPH_CLOSE_SIZE", "31"))  # fill bean interior gaps
 
 # --- Debug window ---
 DEBUG_WINDOW = os.getenv("DEBUG_WINDOW", "0") == "1"
@@ -302,10 +306,15 @@ def is_bean_contour(contour, frame_w, frame_h):
 
 def _build_bean_fg_mask(frame_rgb):
     """
-    Saturation-primary HSV mask.
-    Bean (tan/brown) has S ≥ BEAN_SAT_MIN.
-    White cloth has S ≈ 0; dark threads have V < BEAN_VAL_MIN.
-    Morphological close fills the bean interior into one solid blob.
+    Saturation-primary HSV mask with two-stage morphology.
+
+    Stage 1 — OPEN (erode→dilate):
+        Kills small speckle noise from cloth weave / lighting gradients.
+        Any white region smaller than MORPH_OPEN_SIZE is removed.
+
+    Stage 2 — CLOSE (dilate→erode):
+        Fills wrinkle lines and dark blemish holes inside the bean blob so
+        the bean appears as one solid filled region for contour detection.
     """
     bgr = cv2.cvtColor(frame_rgb[:, :, :3], cv2.COLOR_RGB2BGR)
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
@@ -313,12 +322,17 @@ def _build_bean_fg_mask(frame_rgb):
     s = hsv[:, :, 1]
     v = hsv[:, :, 2]
 
-    foreground = np.uint8((s >= BEAN_SAT_MIN) & (v >= BEAN_VAL_MIN)) * 255
+    raw = np.uint8((s >= BEAN_SAT_MIN) & (v >= BEAN_VAL_MIN)) * 255
 
-    kernel = cv2.getStructuringElement(
-        cv2.MORPH_ELLIPSE, (MORPH_KERNEL_SIZE, MORPH_KERNEL_SIZE)
+    open_k = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (MORPH_OPEN_SIZE, MORPH_OPEN_SIZE)
     )
-    return cv2.morphologyEx(foreground, cv2.MORPH_CLOSE, kernel)
+    opened = cv2.morphologyEx(raw, cv2.MORPH_OPEN, open_k)
+
+    close_k = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (MORPH_CLOSE_SIZE, MORPH_CLOSE_SIZE)
+    )
+    return cv2.morphologyEx(opened, cv2.MORPH_CLOSE, close_k)
 
 
 def _find_bean_contours(blurred, frame_w, frame_h, fg_mask=None):
@@ -366,8 +380,8 @@ def _show_debug_window(frame_rgb, fg_mask, bean_contours, detection_source):
     cv2.line(mask_bgr, (0, TRIPWIRE_Y_MAX), (frame_w, TRIPWIRE_Y_MAX), (0, 255, 255), 1)
     cv2.putText(mask_bgr, "COLOR MASK", (8, 22),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
-    cv2.putText(mask_bgr, f"SAT>={BEAN_SAT_MIN}  VAL>={BEAN_VAL_MIN}", (8, 44),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 0), 1)
+    cv2.putText(mask_bgr, f"SAT>={BEAN_SAT_MIN} VAL>={BEAN_VAL_MIN} O={MORPH_OPEN_SIZE} C={MORPH_CLOSE_SIZE}",
+                (8, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 0), 1)
 
     # Right panel: live camera feed with contours
     cam_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
