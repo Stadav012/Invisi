@@ -45,6 +45,14 @@ BEAN_PAD_PX = 15
 ADAPTIVE_BLOCK_SIZE = int(os.getenv("ADAPTIVE_BLOCK_SIZE", "51"))
 ADAPTIVE_C = int(os.getenv("ADAPTIVE_C", "10"))
 
+# --- Color-based bean segmentation (HSV) ---
+# Rejects bright white cloth (high V + low S) and very dark threads (low V).
+# Bean occupies the middle ground: medium brightness, meaningful saturation.
+BEAN_SAT_MIN = int(os.getenv("BEAN_SAT_MIN", "30"))    # exclude white cloth (low S)
+BEAN_VAL_MIN = int(os.getenv("BEAN_VAL_MIN", "50"))    # exclude dark threads / shadows
+BEAN_VAL_MAX = int(os.getenv("BEAN_VAL_MAX", "210"))   # exclude bright white belt surface
+MORPH_KERNEL_SIZE = int(os.getenv("MORPH_KERNEL_SIZE", "11"))  # closing kernel; fills bean body
+
 # --- Brightness validation ---
 MIN_BRIGHTNESS = int(os.getenv("MIN_BRIGHTNESS", "30"))
 
@@ -288,8 +296,46 @@ def is_bean_contour(contour, frame_w, frame_h):
     return True
 
 
-def _find_bean_contours(blurred, frame_w, frame_h):
-    """Try adaptive thresholding first, fall back to Otsu if nothing found."""
+def _build_bean_fg_mask(frame_rgb):
+    """
+    HSV-based foreground mask that isolates the bean by exclusion:
+      - rejects bright white/grey belt (high V, low S)
+      - rejects very dark thread intersections and shadows (low V)
+    Morphological close fills the bean interior into a single solid blob.
+    """
+    bgr = cv2.cvtColor(frame_rgb[:, :, :3], cv2.COLOR_RGB2BGR)
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+
+    s = hsv[:, :, 1]
+    v = hsv[:, :, 2]
+
+    # Pixels that belong to the cloth surface: bright AND desaturated
+    is_cloth = (v > BEAN_VAL_MAX) & (s < BEAN_SAT_MIN)
+    # Pixels that are too dark: threads, belt frame, deep shadows
+    is_dark = v < BEAN_VAL_MIN
+
+    foreground = np.uint8(~(is_cloth | is_dark)) * 255
+
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (MORPH_KERNEL_SIZE, MORPH_KERNEL_SIZE)
+    )
+    return cv2.morphologyEx(foreground, cv2.MORPH_CLOSE, kernel)
+
+
+def _find_bean_contours(blurred, frame_w, frame_h, frame_rgb=None):
+    """
+    Detection priority:
+      1. Color-based HSV mask (robust against cloth texture)
+      2. Adaptive threshold fallback
+      3. Otsu fallback
+    """
+    if frame_rgb is not None:
+        fg_mask = _build_bean_fg_mask(frame_rgb)
+        contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        beans = [c for c in contours if is_bean_contour(c, frame_w, frame_h)]
+        if beans:
+            return beans
+
     adaptive = cv2.adaptiveThreshold(
         blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY_INV, ADAPTIVE_BLOCK_SIZE, ADAPTIVE_C,
@@ -313,7 +359,7 @@ def find_bean(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
     blurred = cv2.GaussianBlur(gray, (7, 7), 0)
 
-    bean_contours = _find_bean_contours(blurred, frame_w, frame_h)
+    bean_contours = _find_bean_contours(blurred, frame_w, frame_h, frame_rgb=frame)
     if not bean_contours:
         return None, None
 
