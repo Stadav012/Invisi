@@ -79,8 +79,8 @@ SERVO_POOR = float(os.getenv("SERVO_POOR", "-180"))
 
 # --- Classification ---
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.65"))
-# Model convention: 0 = GOOD BEAN, 1 = POOR BEAN
-LABELS = {0: "GOOD BEAN", 1: "POOR BEAN"}
+# Model convention (matches original working script): 0 = POOR BEAN, 1 = GOOD BEAN
+LABELS = {0: "POOR BEAN", 1: "GOOD BEAN"}
 
 # --- Smart sort algorithm ---
 VOTES_REQUIRED = int(os.getenv("VOTES_REQUIRED", "1"))
@@ -574,19 +574,19 @@ class SortController:
         num_votes = len(self.votes)
         avg_infer = float(np.mean(self.vote_times_ms)) if self.vote_times_ms else 0
 
-        good_votes = [(p, c) for p, c in self.votes if p == 0]
-        poor_votes = [(p, c) for p, c in self.votes if p == 1]
+        good_votes = [(p, c) for p, c in self.votes if p == 1]
+        poor_votes = [(p, c) for p, c in self.votes if p == 0]
 
         if len(good_votes) > len(poor_votes):
-            winner = 0
+            winner = 1
             avg_conf = np.mean([c for _, c in good_votes])
         elif len(poor_votes) > len(good_votes):
-            winner = 1
+            winner = 0
             avg_conf = np.mean([c for _, c in poor_votes])
         else:
             good_avg = np.mean([c for _, c in good_votes]) if good_votes else 0
             poor_avg = np.mean([c for _, c in poor_votes]) if poor_votes else 0
-            winner = 0 if good_avg >= poor_avg else 1
+            winner = 1 if good_avg >= poor_avg else 0
             avg_conf = max(good_avg, poor_avg)
 
         self._clear_votes()
@@ -603,11 +603,11 @@ class SortController:
         self.last_sorted_centroid = centroid
 
         if prediction == 0:
-            self.stats["good"] += 1
-            self.consecutive_poor = 0
-        else:
             self.stats["poor"] += 1
             self.consecutive_poor += 1
+        else:
+            self.stats["good"] += 1
+            self.consecutive_poor = 0
 
         self.recent_results.append(prediction)
         if len(self.recent_results) > DRIFT_WINDOW:
@@ -641,7 +641,7 @@ class SortController:
         if len(self.recent_results) < DRIFT_WINDOW:
             self.drift_warning = False
             return
-        poor_ratio = self.recent_results.count(1) / len(self.recent_results)
+        poor_ratio = self.recent_results.count(0) / len(self.recent_results)
         self.drift_warning = poor_ratio >= DRIFT_POOR_RATIO
 
     def resume(self):
@@ -747,7 +747,7 @@ def _execute_sort(gate, ctrl, result, r, batch_id, frame_rgb, bbox, centroid, pi
 
     log_sorting_result(r, prediction, confidence, avg_inference_ms, batch_id, votes_used)
 
-    gate.angle = SERVO_GOOD if prediction == 0 else SERVO_POOR
+    gate.angle = SERVO_POOR if prediction == 0 else SERVO_GOOD
     time.sleep(CONVEYOR_BELT_DELAY_S)
 
     ctrl.record_sort(prediction, centroid)
