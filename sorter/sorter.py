@@ -353,15 +353,25 @@ def _find_bean_contours(blurred, frame_w, frame_h):
     for thresh_img, source in _threshold_candidates(blurred):
         contours, _ = cv2.findContours(thresh_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # Tier 1: full shape filter
+        # Tier 1: full shape filter (solidity, aspect ratio, edge margin, area bounds)
         shaped = [c for c in contours if is_bean_contour(c, frame_w, frame_h)]
         if shaped:
             return shaped, source
 
-        # Tier 2: just the largest blob above the minimum area (original script logic)
-        significant = [c for c in contours if cv2.contourArea(c) > MIN_CONTOUR_AREA]
-        if significant:
-            return [max(significant, key=cv2.contourArea)], f"{source}-raw"
+        # Tier 2: relaxed filter — area bounds only, plus a frame-coverage guard.
+        # Skips solidity/edge-margin so dark/damaged beans at frame edges are caught.
+        # The frame-coverage check prevents the belt cloth itself from being returned
+        # as a bean when there is nothing on the belt (a full-frame contour is background).
+        for c in sorted(contours, key=cv2.contourArea, reverse=True):
+            area = cv2.contourArea(c)
+            if area < MIN_CONTOUR_AREA:
+                break  # sorted descending; nothing larger coming
+            if area > MAX_CONTOUR_AREA:
+                continue
+            x, y, w, h = cv2.boundingRect(c)
+            if w > frame_w * 0.75 or h > frame_h * 0.75:
+                continue  # contour spans most of the frame = cloth background, not a bean
+            return [c], f"{source}-raw"
 
     return [], "none"
 
