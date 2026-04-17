@@ -339,24 +339,43 @@ def _build_bean_fg_mask(frame_rgb):
 
 def _find_bean_contours(blurred, frame_w, frame_h):
     """
-    Detection priority — mirrors the original working script:
-      1. Otsu  — global threshold, reliable for any bean colour on the bright belt
-      2. Adaptive threshold — fallback for uneven lighting
+    Detection — Otsu primary (mirrors original working script), adaptive fallback.
     HSV colour mask is NOT used for detection; it exists only for debug visualisation.
-    Returns (contours, source) where source is 'otsu'|'adaptive'.
+
+    Two-tier contour selection per threshold pass:
+      Tier 1 — shape-filtered (solidity, aspect ratio, edge margin): rejects noise for
+               normal beans under good lighting.
+      Tier 2 — largest-blob fallback (area only, no shape checks): mirrors the original
+               script and catches dark/damaged/irregular beans that fail shape filters.
+
+    Returns (contours, source).
     """
+    for thresh_img, source in _threshold_candidates(blurred):
+        contours, _ = cv2.findContours(thresh_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Tier 1: full shape filter
+        shaped = [c for c in contours if is_bean_contour(c, frame_w, frame_h)]
+        if shaped:
+            return shaped, source
+
+        # Tier 2: just the largest blob above the minimum area (original script logic)
+        significant = [c for c in contours if cv2.contourArea(c) > MIN_CONTOUR_AREA]
+        if significant:
+            return [max(significant, key=cv2.contourArea)], f"{source}-raw"
+
+    return [], "none"
+
+
+def _threshold_candidates(blurred):
+    """Yield (binary_mask, label) pairs in detection priority order."""
     _, otsu = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    contours, _ = cv2.findContours(otsu, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    beans = [c for c in contours if is_bean_contour(c, frame_w, frame_h)]
-    if beans:
-        return beans, "otsu"
+    yield otsu, "otsu"
 
     adaptive = cv2.adaptiveThreshold(
         blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY_INV, ADAPTIVE_BLOCK_SIZE, ADAPTIVE_C,
     )
-    contours, _ = cv2.findContours(adaptive, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    return [c for c in contours if is_bean_contour(c, frame_w, frame_h)], "adaptive"
+    yield adaptive, "adaptive"
 
 
 def _show_debug_window(frame_rgb, fg_mask, bean_contours, detection_source):
