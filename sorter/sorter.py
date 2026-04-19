@@ -5,6 +5,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 
 import cv2
@@ -266,6 +267,46 @@ class BeltController:
     def clearance_pulse(self):
         """Short forward pulse to push bean past the gate, then auto-stops."""
         self._send("C")
+
+
+
+# ---------------------------------------------------------------------------
+# Frame grabber
+# ---------------------------------------------------------------------------
+
+
+class _FrameGrabber:
+    """Background thread that continuously drains Picamera2's ring buffer.
+
+    Picamera2 captures frames at the camera's native rate regardless of
+    whether the main loop is reading. Without draining, capture_array()
+    returns a frame from up to buffer_count captures ago. This thread
+    keeps the buffer current so capture_array() always returns the frame
+    closest in time to when you call it.
+    """
+
+    def __init__(self, picam2):
+        self._picam2 = picam2
+        self._frame = None
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="frame-grabber")
+        self._thread.start()
+
+    def _run(self):
+        while not self._stop_event.is_set():
+            frame = self._picam2.capture_array()
+            with self._lock:
+                self._frame = frame
+
+    def capture_array(self):
+        """Return the most recently captured frame."""
+        with self._lock:
+            return self._frame.copy() if self._frame is not None else None
+
+    def stop(self):
+        self._stop_event.set()
+        self._thread.join(timeout=2)
 
 
 # ---------------------------------------------------------------------------
@@ -731,7 +772,7 @@ def _show_idle_frame(frame_rgb, bbox, on_tripwire, ctrl):
 # ---------------------------------------------------------------------------
 
 
-def _execute_sort(gate, ctrl, result, r, batch_id, frame_rgb, bbox, centroid, picam2, belt):
+def _execute_sort(gate, ctrl, result, r, batch_id, frame_rgb, bbox, centroid, belt):
     """Physically sort the bean: start belt, wait for bean to reach gate, actuate, stop."""
     prediction, confidence, votes_used, avg_inference_ms = result
 
@@ -742,7 +783,7 @@ def _execute_sort(gate, ctrl, result, r, batch_id, frame_rgb, bbox, centroid, pi
     # belt.clearance_pulse() blocks until the pulse ends, so we can't use it here.
     if belt.available:
         belt.forward()
-    
+
     # Wait for the bean to travel from the camera to the gate.
     # CAMERA_TO_GATE_DELAY_S = physical_distance / belt_speed.
     # For ~9cm at this belt speed, 0.65s is a good starting point.
@@ -764,9 +805,7 @@ def _execute_sort(gate, ctrl, result, r, batch_id, frame_rgb, bbox, centroid, pi
         time.sleep(SORT_CLEARANCE_DELAY_S)
 
     gate.angle = SERVO_NEUTRAL
-
-    for _ in range(BUFFER_FLUSH_FRAMES):
-        picam2.capture_array()
+    # Buffer flushing no longer needed — _FrameGrabber drains the camera continuously.
 
 
 # ---------------------------------------------------------------------------
@@ -777,7 +816,7 @@ def _execute_sort(gate, ctrl, result, r, batch_id, frame_rgb, bbox, centroid, pi
 def _init_camera():
     logger.info("Initializing camera")
     picam2 = Picamera2()
-    # buffer_count=2 is the minimum — keeps latency to at most one frame old.
+    # buffer_count=2 minimises the frame age at the moment we drain the buffer.
     config = picam2.create_video_configuration(main={"size": (640, 480)}, buffer_count=2)
     picam2.configure(config)
     picam2.start()
@@ -792,7 +831,16 @@ def _init_camera():
         picam2.capture_array()
     time.sleep(0.5)
 
-    return picam2
+    # Start background grabber AFTER warmup so the main loop always reads
+    # the frame captured closest to the moment it calls capture_array().
+    grabber = _FrameGrabber(picam2)
+    # Wait briefly until grabber has its first frame.
+    for _ in range(20):
+        if grabber.capture_array() is not None:
+            break
+        time.sleep(0.05)
+
+    return picam2, grabber
 
 
 def _check_quit():
@@ -802,10 +850,12 @@ def _check_quit():
     return (cv2.waitKey(1) & 0xFF) == ord('q')
 
 
-def _classify_stationary_bean(session, input_name, picam2, ctrl):
+def _classify_stationary_bean(session, input_name, grabber, ctrl):
     """Capture multiple frames of a stopped bean and vote. Returns (result, frame, bbox, centroid) or Nones."""
     for _ in range(VOTES_REQUIRED + 2):
-        frame_rgb = picam2.capture_array()
+        frame_rgb = grabber.capture_array()
+        if frame_rgb is None:
+            continue
 
         brightness = frame_brightness(frame_rgb)
         if brightness < MIN_BRIGHTNESS:
@@ -851,7 +901,7 @@ def run():
     belt = BeltController()
     batch_id = fetch_active_batch_id()
     last_batch_refresh = time.time()
-    picam2 = _init_camera()
+    picam2, grabber = _init_camera()
 
     if batch_id:
         logger.info(f"Active batch: {batch_id}")
@@ -863,12 +913,13 @@ def run():
 
     try:
         if belt.available:
-            _run_belt_mode(gate, session, input_name, r, belt, picam2, ctrl, batch_id, last_batch_refresh)
+            _run_belt_mode(gate, session, input_name, r, belt, grabber, ctrl, batch_id, last_batch_refresh)
         else:
-            _run_passive_mode(gate, session, input_name, r, picam2, ctrl, batch_id, last_batch_refresh)
+            _run_passive_mode(gate, session, input_name, r, grabber, ctrl, batch_id, last_batch_refresh)
     except KeyboardInterrupt:
         logger.info("Shutdown signal received (CTRL+C)")
     finally:
+        grabber.stop()
         if belt.available:
             belt.stop()
         gate.angle = SERVO_NEUTRAL
@@ -880,7 +931,7 @@ def run():
         logger.info("Camera released. System shutdown.")
 
 
-def _run_belt_mode(gate, session, input_name, r, belt, picam2, ctrl, batch_id, last_batch_refresh):
+def _run_belt_mode(gate, session, input_name, r, belt, grabber, ctrl, batch_id, last_batch_refresh):
     """Pi-controlled stop-and-go: run belt -> detect bean -> stop -> classify -> sort -> repeat."""
     global _shutdown_requested
 
@@ -903,13 +954,12 @@ def _run_belt_mode(gate, session, input_name, r, belt, picam2, ctrl, batch_id, l
         bean_found = False
 
         while not _shutdown_requested and not bean_found:
-            # Flush any frames that buffered during the previous nudge+settle cycle
-            # so capture_array() returns the current belt state, not a stale frame.
-            for _ in range(2):
-                picam2.capture_array()
-
-            # Check camera BEFORE nudging (bean may already be in frame)
-            frame_rgb = picam2.capture_array()
+            # grabber.capture_array() always returns the most recent frame —
+            # no manual flushing needed.
+            frame_rgb = grabber.capture_array()
+            if frame_rgb is None:
+                time.sleep(0.05)
+                continue
 
             brightness = frame_brightness(frame_rgb)
             ctrl.low_light = brightness < MIN_BRIGHTNESS
@@ -937,18 +987,16 @@ def _run_belt_mode(gate, session, input_name, r, belt, picam2, ctrl, batch_id, l
 
         # Step 2: Bean visible and belt already stopped (nudge auto-stops)
         time.sleep(BELT_SETTLE_S)
-        for _ in range(2):  # flush frames that stacked during settle
-            picam2.capture_array()
 
         # Step 3: Classify the stationary bean
         # The bean may have stopped before or on the tripwire — either is fine
         result, frame_rgb, bbox, centroid = _classify_stationary_bean(
-            session, input_name, picam2, ctrl)
+            session, input_name, grabber, ctrl)
 
         if result is not None:
             # Step 4: Sort — gate opens, belt pushes bean through
             _execute_sort(gate, ctrl, result, r, batch_id,
-                          frame_rgb, bbox, centroid, picam2, belt)
+                          frame_rgb, bbox, centroid, belt)
         else:
             # Bean detected but classification failed — push it through anyway
             logger.info("Classification inconclusive, advancing belt")
@@ -958,7 +1006,7 @@ def _run_belt_mode(gate, session, input_name, r, belt, picam2, ctrl, batch_id, l
         time.sleep(0.2)
 
 
-def _run_passive_mode(gate, session, input_name, r, picam2, ctrl, batch_id, last_batch_refresh):
+def _run_passive_mode(gate, session, input_name, r, grabber, ctrl, batch_id, last_batch_refresh):
     """Fallback: no belt control, passively watch a moving belt (original behavior)."""
     global _shutdown_requested
 
@@ -966,7 +1014,10 @@ def _run_passive_mode(gate, session, input_name, r, picam2, ctrl, batch_id, last
     dummy_belt = BeltController()  # no-op belt (conn=None)
 
     while not _shutdown_requested:
-        frame_rgb = picam2.capture_array()
+        frame_rgb = grabber.capture_array()
+        if frame_rgb is None:
+            time.sleep(0.05)
+            continue
 
         now = time.time()
         if now - last_batch_refresh > BATCH_REFRESH_INTERVAL_S:
@@ -998,7 +1049,7 @@ def _run_passive_mode(gate, session, input_name, r, picam2, ctrl, batch_id, last
                     last_bbox = bbox if bbox is not None else (0, 0, 1, 1)
                     last_cent = centroid if centroid is not None else ctrl.vote_centroid
                     _execute_sort(gate, ctrl, result, r, batch_id,
-                                  frame_rgb, last_bbox, last_cent, picam2, dummy_belt)
+                                  frame_rgb, last_bbox, last_cent, dummy_belt)
                     continue
                 else:
                     ctrl.discard_if_voting()
@@ -1030,7 +1081,7 @@ def _run_passive_mode(gate, session, input_name, r, picam2, ctrl, batch_id, last
                 result = ctrl.commit()
                 if result is not None:
                     _execute_sort(gate, ctrl, result, r, batch_id,
-                                  frame_rgb, bbox, centroid, picam2, dummy_belt)
+                                  frame_rgb, bbox, centroid, dummy_belt)
                     continue
 
         _show_idle_frame(frame_rgb, bbox, on_tripwire, ctrl)
