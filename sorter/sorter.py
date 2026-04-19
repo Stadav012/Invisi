@@ -777,7 +777,8 @@ def _execute_sort(gate, ctrl, result, r, batch_id, frame_rgb, bbox, centroid, pi
 def _init_camera():
     logger.info("Initializing camera")
     picam2 = Picamera2()
-    config = picam2.create_video_configuration(main={"size": (640, 480)})
+    # buffer_count=2 is the minimum — keeps latency to at most one frame old.
+    config = picam2.create_video_configuration(main={"size": (640, 480)}, buffer_count=2)
     picam2.configure(config)
     picam2.start()
 
@@ -902,6 +903,11 @@ def _run_belt_mode(gate, session, input_name, r, belt, picam2, ctrl, batch_id, l
         bean_found = False
 
         while not _shutdown_requested and not bean_found:
+            # Flush any frames that buffered during the previous nudge+settle cycle
+            # so capture_array() returns the current belt state, not a stale frame.
+            for _ in range(2):
+                picam2.capture_array()
+
             # Check camera BEFORE nudging (bean may already be in frame)
             frame_rgb = picam2.capture_array()
 
@@ -931,6 +937,8 @@ def _run_belt_mode(gate, session, input_name, r, belt, picam2, ctrl, batch_id, l
 
         # Step 2: Bean visible and belt already stopped (nudge auto-stops)
         time.sleep(BELT_SETTLE_S)
+        for _ in range(2):  # flush frames that stacked during settle
+            picam2.capture_array()
 
         # Step 3: Classify the stationary bean
         # The bean may have stopped before or on the tripwire — either is fine
