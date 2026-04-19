@@ -71,7 +71,8 @@ SORT_CLEARANCE_DELAY_S = float(os.getenv("SORT_CLEARANCE_DELAY_S", "0.5"))
 # Time from classification (bean under camera) to gate actuation.
 # Set this to: distance_between_camera_and_gate / belt_speed.
 # Increase if the bean arrives at the gate too late; decrease if it passes before the gate opens.
-CAMERA_TO_GATE_DELAY_S = float(os.getenv("CAMERA_TO_GATE_DELAY_S", "0.0"))
+# At ~9cm camera-to-gate distance, 0.65s leaves 0.25s (CONVEYOR_BELT_DELAY_S) for the bean to clear.
+CAMERA_TO_GATE_DELAY_S = float(os.getenv("CAMERA_TO_GATE_DELAY_S", "0.65"))
 MIN_SORT_GAP_S = float(os.getenv("MIN_SORT_GAP_S", "0.3"))
 BUFFER_FLUSH_FRAMES = 5
 IDLE_SLEEP_S = 0.01
@@ -725,26 +726,34 @@ def _show_idle_frame(frame_rgb, bbox, on_tripwire, ctrl):
 
 
 def _execute_sort(gate, ctrl, result, r, batch_id, frame_rgb, bbox, centroid, picam2, belt):
-    """Physically sort the bean: actuate servo, push bean through, update state."""
+    """Physically sort the bean: start belt, wait for bean to reach gate, actuate, stop."""
     prediction, confidence, votes_used, avg_inference_ms = result
 
     log_sorting_result(r, prediction, confidence, avg_inference_ms, batch_id, votes_used)
 
-    # Wait for the bean to travel from the camera detection point to the sort gate.
-    # Tune CAMERA_TO_GATE_DELAY_S = physical_distance / belt_speed.
-    if CAMERA_TO_GATE_DELAY_S > 0:
-        time.sleep(CAMERA_TO_GATE_DELAY_S)
+    # Start belt immediately so the bean begins travelling toward the gate.
+    # belt.forward() is non-blocking (Arduino responds 'OK' instantly).
+    # belt.clearance_pulse() blocks until the pulse ends, so we can't use it here.
+    if belt.available:
+        belt.forward()
+    
+    # Wait for the bean to travel from the camera to the gate.
+    # CAMERA_TO_GATE_DELAY_S = physical_distance / belt_speed.
+    # For ~9cm at this belt speed, 0.65s is a good starting point.
+    time.sleep(CAMERA_TO_GATE_DELAY_S)
 
+    # Gate opens — bean should be arriving now.
     gate.angle = SERVO_POOR if prediction == 0 else SERVO_GOOD
-    time.sleep(CONVEYOR_BELT_DELAY_S)  # servo settling time
+    time.sleep(CONVEYOR_BELT_DELAY_S)  # bean passes through gate
 
     ctrl.record_sort(prediction, centroid)
 
     _show_sorted_frame(frame_rgb, bbox, LABELS[prediction], confidence,
                        avg_inference_ms, ctrl, votes_used)
 
+    # Stop belt and close gate.
     if belt.available:
-        belt.clearance_pulse()
+        belt.stop()
     else:
         time.sleep(SORT_CLEARANCE_DELAY_S)
 
