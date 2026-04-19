@@ -104,7 +104,7 @@ TRIPWIRE_Y_MAX = int(os.getenv("TRIPWIRE_Y_MAX", "380"))
 # --- Belt serial control ---
 BELT_SERIAL_PORT = os.getenv("BELT_SERIAL_PORT", "/dev/ttyACM0")
 BELT_BAUD_RATE = int(os.getenv("BELT_BAUD_RATE", "115200"))
-BELT_SETTLE_S = float(os.getenv("BELT_SETTLE_S", "0.3"))
+BELT_SETTLE_S = float(os.getenv("BELT_SETTLE_S", "0.7"))
 
 # --- Batch refresh ---
 BATCH_REFRESH_INTERVAL_S = 60
