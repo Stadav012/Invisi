@@ -223,9 +223,15 @@ class BeltController:
     def __init__(self):
         self.conn = None
         try:
-            self.conn = serial.Serial(BELT_SERIAL_PORT, BELT_BAUD_RATE, timeout=2)
-            time.sleep(2)  # Arduino resets on serial connect
-            startup = self.conn.readline().decode().strip()
+            self.conn = serial.Serial(BELT_SERIAL_PORT, BELT_BAUD_RATE, timeout=3)
+            time.sleep(2.5)  # Arduino resets on serial connect; wait for it to boot
+            # Drain the full startup buffer — Arduino may send multiple lines before READY
+            startup = ""
+            while self.conn.in_waiting:
+                startup = self.conn.readline().decode().strip()
+            if not startup:
+                # in_waiting was 0 but Arduino might just be slow; try one blocking read
+                startup = self.conn.readline().decode().strip()
             logger.info(f"Belt connected: {startup}")
         except Exception as e:
             logger.warning(f"Belt serial unavailable ({BELT_SERIAL_PORT}): {e}")
@@ -239,6 +245,7 @@ class BeltController:
         if not self.available:
             return
         try:
+            self.conn.reset_input_buffer()  # discard any stale bytes before reading response
             self.conn.write(cmd.encode())
             resp = self.conn.readline().decode().strip()
             if resp != "OK":
