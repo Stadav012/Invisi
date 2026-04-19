@@ -68,6 +68,10 @@ MIN_BRIGHTNESS = int(os.getenv("MIN_BRIGHTNESS", "30"))
 # --- Timing ---
 CONVEYOR_BELT_DELAY_S = float(os.getenv("CONVEYOR_BELT_DELAY_S", "0.25"))
 SORT_CLEARANCE_DELAY_S = float(os.getenv("SORT_CLEARANCE_DELAY_S", "0.5"))
+# Time from classification (bean under camera) to gate actuation.
+# Set this to: distance_between_camera_and_gate / belt_speed.
+# Increase if the bean arrives at the gate too late; decrease if it passes before the gate opens.
+CAMERA_TO_GATE_DELAY_S = float(os.getenv("CAMERA_TO_GATE_DELAY_S", "0.0"))
 MIN_SORT_GAP_S = float(os.getenv("MIN_SORT_GAP_S", "0.3"))
 BUFFER_FLUSH_FRAMES = 5
 IDLE_SLEEP_S = 0.01
@@ -726,8 +730,13 @@ def _execute_sort(gate, ctrl, result, r, batch_id, frame_rgb, bbox, centroid, pi
 
     log_sorting_result(r, prediction, confidence, avg_inference_ms, batch_id, votes_used)
 
+    # Wait for the bean to travel from the camera detection point to the sort gate.
+    # Tune CAMERA_TO_GATE_DELAY_S = physical_distance / belt_speed.
+    if CAMERA_TO_GATE_DELAY_S > 0:
+        time.sleep(CAMERA_TO_GATE_DELAY_S)
+
     gate.angle = SERVO_POOR if prediction == 0 else SERVO_GOOD
-    time.sleep(CONVEYOR_BELT_DELAY_S)
+    time.sleep(CONVEYOR_BELT_DELAY_S)  # servo settling time
 
     ctrl.record_sort(prediction, centroid)
 

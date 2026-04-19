@@ -14,11 +14,15 @@
 
 const int duty = 67;
 
-// How far the belt moves per nudge. Start at 150ms; increase if
+// How far the belt moves per nudge (scanning step). Start at 150ms; increase if
 // beans aren't entering the frame, decrease if they're overshooting.
 const int nudgeMs = 150;
 
-const int clearancePulseMs = 1600;
+// How long to run the belt after sorting to push the bean from the camera position
+// past the sort gate. Set this to cover your camera-to-gate distance.
+// Formula: (camera_to_gate_cm / belt_speed_cm_per_s) * 1000 + margin.
+// At current duty with ~9cm gap, 900ms is a good starting point.
+const int clearancePulseMs = 900;
 
 void setup() {
   Serial.begin(115200);
