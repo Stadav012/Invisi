@@ -28,7 +28,7 @@ logger = logging.getLogger("invisi.sorter")
 # Configuration — all tunables are env-configurable
 # ---------------------------------------------------------------------------
 
-MODEL_PATH = os.getenv("MODEL_PATH", "/home/invisi/Desktop/invisi_models/Trained_ResNet50_INT8.onnx")
+MODEL_PATH = os.getenv("MODEL_PATH", "/home/invisi/Desktop/invisi_models/Trained_MobileNetV3_INT8.onnx")
 SERVO_PIN = int(os.getenv("SERVO_PIN", "18"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
@@ -69,8 +69,7 @@ MIN_BRIGHTNESS = int(os.getenv("MIN_BRIGHTNESS", "30"))
 CONVEYOR_BELT_DELAY_S = float(os.getenv("CONVEYOR_BELT_DELAY_S", "0.25"))
 SORT_CLEARANCE_DELAY_S = float(os.getenv("SORT_CLEARANCE_DELAY_S", "0.5"))
 # Time from classification (bean under camera) to gate actuation.
-# Set this to: distance_between_camera_and_gate / belt_speed.
-# Increase if the bean arrives at the gate too late; decrease if it passes before the gate opens.
+# Distance_between_camera_and_gate / belt_speed.
 # At ~9cm camera-to-gate distance, 0.65s leaves 0.25s (CONVEYOR_BELT_DELAY_S) for the bean to clear.
 CAMERA_TO_GATE_DELAY_S = float(os.getenv("CAMERA_TO_GATE_DELAY_S", "0.65"))
 MIN_SORT_GAP_S = float(os.getenv("MIN_SORT_GAP_S", "0.3"))
