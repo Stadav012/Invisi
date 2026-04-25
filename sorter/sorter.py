@@ -1,4 +1,4 @@
-"""Invisi optical bean sorter — classifies cocoa beans via ResNet50/MobileNet INT8."""
+"""Invisi optical bean sorter — classifies cocoa beans via ResNet50 INT8."""
 
 import json
 import logging
@@ -29,7 +29,7 @@ logger = logging.getLogger("invisi.sorter")
 # Configuration — all tunables are env-configurable
 # ---------------------------------------------------------------------------
 
-MODEL_PATH = os.getenv("MODEL_PATH", "/home/invisi/Desktop/invisi_models/Trained_MobileNetV3_INT8.onnx")
+MODEL_PATH = os.getenv("MODEL_PATH", "/home/invisi/Desktop/invisi_models/Trained_ResNet50_INT8.onnx")
 SERVO_PIN = int(os.getenv("SERVO_PIN", "18"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
@@ -225,7 +225,7 @@ class BeltController:
         self.conn = None
         try:
             self.conn = serial.Serial(BELT_SERIAL_PORT, BELT_BAUD_RATE, timeout=3)
-            time.sleep(2.5)  # Arduino resets on serial connect; wait for it to boot
+            time.sleep(2.5)  
             # Drain the full startup buffer — Arduino may send multiple lines before READY
             startup = ""
             while self.conn.in_waiting:
@@ -282,7 +282,7 @@ class _FrameGrabber:
     whether the main loop is reading. Without draining, capture_array()
     returns a frame from up to buffer_count captures ago. This thread
     keeps the buffer current so capture_array() always returns the frame
-    closest in time to when you call it.
+    closest in time to when called.
     """
 
     def __init__(self, picam2):
