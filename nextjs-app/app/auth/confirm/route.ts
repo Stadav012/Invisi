@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 
 export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
+    const authError = searchParams.get("error_description") || searchParams.get("error");
     const code = searchParams.get("code");
     const email = searchParams.get("email");
     const token = searchParams.get("token");
@@ -17,10 +18,21 @@ export async function GET(request: NextRequest) {
     redirectTo.searchParams.delete("token");
     redirectTo.searchParams.delete("token_hash");
     redirectTo.searchParams.delete("type");
+    redirectTo.searchParams.delete("error");
+    redirectTo.searchParams.delete("error_code");
+    redirectTo.searchParams.delete("error_description");
+
+    if (authError) {
+        redirectTo.pathname = "/login";
+        redirectTo.searchParams.set("error", authError);
+        return NextResponse.redirect(redirectTo);
+    }
 
     const supabase = await createClient();
+    let attemptedVerification = false;
 
     if (code) {
+        attemptedVerification = true;
         const { error } = await supabase.auth.exchangeCodeForSession(code);
         if (!error) {
             return NextResponse.redirect(redirectTo);
@@ -28,6 +40,7 @@ export async function GET(request: NextRequest) {
     }
 
     if (token && type) {
+        attemptedVerification = true;
         if (email) {
             const { error } = await supabase.auth.verifyOtp({ type, token, email });
             if (!error) {
@@ -42,11 +55,18 @@ export async function GET(request: NextRequest) {
     }
 
     if (token_hash && type) {
+        attemptedVerification = true;
         const { error } = await supabase.auth.verifyOtp({ type, token_hash });
 
         if (!error) {
             return NextResponse.redirect(redirectTo);
         }
+    }
+
+    if (!attemptedVerification) {
+        redirectTo.pathname = "/login";
+        redirectTo.searchParams.set("message", "Email confirmed. Please sign in.");
+        return NextResponse.redirect(redirectTo);
     }
 
     redirectTo.pathname = "/login";
