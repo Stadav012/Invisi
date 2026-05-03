@@ -327,15 +327,18 @@ Transitions are enforced in sequence. The database enforces valid states via a C
 
 ```
 Invisi/
-├── esp32/
-│   └── invisi_pod/
-│       └── invisi_pod.ino              # ESP32 firmware — sensors, MQTT, deep sleep
-│
+├── AGENTS.md                           # Agent operating instructions (mirrored guidance)
+├── STYLE.md                            # Project code style guide
+├── README.md                           # Project documentation
 ├── edge/
 │   ├── migration.sql                   # Supabase schema migration (edge-first naming)
 │   ├── setup.sh                        # Pi provisioning (Node, Redis, Mosquitto, systemd)
 │   ├── mosquitto.conf                  # Local MQTT broker config
 │   └── invisi-telemetry.service        # systemd unit for telemetry worker
+│
+├── esp32/
+│   └── invisi_pod/
+│       └── invisi_pod.ino              # ESP32 firmware — sensors, MQTT, deep sleep
 │
 ├── model-training/
 │   ├── Invisi_models_training.ipynb    # Full training notebook — 6 models, Grad-CAM,
@@ -352,22 +355,63 @@ Invisi/
 │       ├── 7. Bounding Box Object Image/
 │       └── 8. Cropping Object Image/         (final preprocessed beans)
 │
-├── sorter/
-│   ├── sorter.py                       # Optical sorting — camera, ONNX, servo, Redis
-│   └── requirements.txt                # Python deps (opencv, onnxruntime, redis, etc.)
-│
 ├── nextjs-app/
-│   ├── app/                            # Next.js App Router (pages + API routes)
-│   ├── components/                     # React components (PodView, Charts, BatchCard)
-│   ├── lib/                            # Shared libraries (Supabase client)
+│   ├── app/                            # App Router pages, server actions, route handlers
+│   │   ├── page.tsx                    # Dashboard home
+│   │   ├── monitor/page.tsx            # Live telemetry + historical monitoring
+│   │   ├── market/page.tsx             # Batch lifecycle management
+│   │   ├── profile/page.tsx            # Profile/system status
+│   │   ├── login/page.tsx              # Login/signup UI
+│   │   ├── login/actions.ts            # Server actions for auth
+│   │   ├── auth/
+│   │   │   ├── confirm/route.ts        # Email confirmation callback
+│   │   │   └── signout/route.ts        # Logout route handler
+│   │   └── api/
+│   │       ├── batches/route.ts        # List/create batches
+│   │       ├── batches/[id]/route.ts   # Update/delete a single batch
+│   │       ├── readings/route.ts       # Sensor readings API
+│   │       ├── readings/hourly/route.ts# Hourly rollup API
+│   │       └── sorting/route.ts        # Sorter output API
+│   ├── components/                     # Reusable UI and visualization components
+│   │   ├── Header.tsx
+│   │   ├── BottomNav.tsx
+│   │   ├── PodView.tsx
+│   │   ├── ThermalChart.tsx
+│   │   ├── TurnAlert.tsx
+│   │   ├── BatchCard.tsx
+│   │   ├── NewBatchModal.tsx
+│   │   ├── SortingStats.tsx
+│   │   └── StatsCard.tsx
+│   ├── lib/supabase/                   # Supabase clients + middleware integration
+│   │   ├── client.ts
+│   │   ├── server.ts
+│   │   └── middleware.ts
 │   ├── telemetry/
 │   │   ├── bridge.ts                   # MQTT → Redis Stream
 │   │   ├── consumer.ts                 # Redis Stream → Supabase
-│   │   └── index.ts                    # Worker entry point + health checks
-│   ├── package.json
+│   │   ├── index.ts                    # Worker entry point + health checks
+│   │   ├── logging.ts                  # Structured worker logging utilities
+│   │   ├── simulator.ts                # Telemetry simulation helper
+│   │   └── test-redis.ts               # Redis connectivity test script
+│   ├── public/                         # Static assets and icons
+│   ├── app/globals.css                 # Global styling
+│   ├── app/layout.tsx                  # Root layout
+│   ├── proxy.ts                        # Session/update middleware proxy
+│   ├── next.config.ts                  # Next.js configuration
+│   ├── eslint.config.mjs               # Linting config
+│   ├── postcss.config.mjs              # PostCSS/Tailwind plumbing
+│   ├── tsconfig.json                   # TypeScript config
+│   ├── package.json                    # Web app dependencies/scripts
+│   ├── package-lock.json               # npm lockfile
+│   ├── bun.lock                        # bun lockfile
+│   ├── README.md                       # App-specific setup notes
 │   └── render.yaml                     # Render deployment config for telemetry worker
 │
-└── README.md                           # This file
+└── sorter/
+    ├── sorter.py                       # Optical sorting runtime (camera, ONNX, servo, Redis)
+    ├── requirements.txt                # Python dependencies for sorter runtime
+    └── conveyor/
+        └── conveyor.ino                # Conveyor controller firmware (microcontroller)
 ```
 
 ---
