@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const code = searchParams.get("code");
+    const email = searchParams.get("email");
     const token = searchParams.get("token");
     const token_hash = searchParams.get("token_hash");
     const type = searchParams.get("type") as EmailOtpType | null;
@@ -12,6 +13,7 @@ export async function GET(request: NextRequest) {
     const redirectTo = request.nextUrl.clone();
     redirectTo.pathname = "/";
     redirectTo.searchParams.delete("code");
+    redirectTo.searchParams.delete("email");
     redirectTo.searchParams.delete("token");
     redirectTo.searchParams.delete("token_hash");
     redirectTo.searchParams.delete("type");
@@ -26,9 +28,16 @@ export async function GET(request: NextRequest) {
     }
 
     if (token && type) {
-        const { error } = await supabase.auth.verifyOtp({ type, token });
-        if (!error) {
-            return NextResponse.redirect(redirectTo);
+        if (email) {
+            const { error } = await supabase.auth.verifyOtp({ type, token, email });
+            if (!error) {
+                return NextResponse.redirect(redirectTo);
+            }
+        } else {
+            const { error } = await supabase.auth.verifyOtp({ type, token_hash: token });
+            if (!error) {
+                return NextResponse.redirect(redirectTo);
+            }
         }
     }
 
