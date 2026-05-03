@@ -7,7 +7,6 @@ import signal
 import sys
 import threading
 import time
-
 import cv2
 import numpy as np
 import onnxruntime as ort
@@ -47,13 +46,13 @@ BEAN_PAD_PX = 15
 ADAPTIVE_BLOCK_SIZE = int(os.getenv("ADAPTIVE_BLOCK_SIZE", "51"))
 ADAPTIVE_C = int(os.getenv("ADAPTIVE_C", "10"))
 
-# --- Color-based bean segmentation (HSV) ---
+#--- Color-based bean segmentation (HSV) ---
 # Saturation is the primary discriminator:
 #   white/grey cloth  → S ≈ 0–20   (nearly colourless)
 #   dark threads      → V ≈ 0–50   (very dark regardless of S)
 #   tan/brown bean    → S ≥ 30+    (visibly coloured, even if bright)
 BEAN_SAT_MIN = int(os.getenv("BEAN_SAT_MIN", "30"))     # min S; raise if cloth bleeds through
-BEAN_VAL_MIN = int(os.getenv("BEAN_VAL_MIN", "40"))     # min V; exclude dark threads / shadows
+BEAN_VAL_MIN = int(os.getenv ("BEAN_VAL_MIN", "40"))     # min V; exclude dark threads / shadows
 # Two-stage morphology:
 #   OPEN  — erodes then dilates; kills small speckle noise from cloth texture
 #   CLOSE — dilates then erodes; fills wrinkle lines and dark blemish holes inside the bean
